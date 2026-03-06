@@ -1,0 +1,36 @@
+{
+  "$schema": "https://opencode.ai/schema.json",
+  "mcp": {
+    "video-editor": {
+      "type": "remote",
+      "url": "http://localhost:3000/api/mcp",
+      "description": "Video Editor Pro MCP Server - Tools for AI-powered video editing including YouTube download, clip extraction, reframing, captions, and AI generation"
+    }
+  },
+  "skills": {
+    "youtube-to-shorts": {
+      "path": ".opencode/skills/youtube-to-shorts/SKILL.md",
+      "description": "Convert YouTube videos to TikTok/Reels/Shorts format"
+    },
+    "podcast-clip": {
+      "path": ".opencode/skills/podcast-clip/SKILL.md",
+      "description": "Extract highlight clips from podcasts"
+    },
+    "product-promo": {
+      "path": ".opencode/skills/product-promo/SKILL.md",
+      "description": "Create professional product promotional videos"
+    }
+  },
+  "model": {
+    "provider": "nvidia",
+    "model": "z-ai/glm5",
+    "apiKey": "${NV_API_KEY}"
+  },
+  "fallbacks": [
+    {
+      "provider": "openrouter",
+      "model": "nvidia/nemotron-nano-12b-v2-vl:free",
+      "apiKey": "${OPENROUTER_API_KEY}"
+    }
+  ]
+}
