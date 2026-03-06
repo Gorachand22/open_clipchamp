@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { 
-  DndContext, 
-  DragEndEvent, 
+import {
+  DndContext,
+  DragEndEvent,
   DragStartEvent,
   DragOverlay,
   useSensors,
@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import type { MediaItem, AspectRatio } from '@/types/editor';
 import { KEYBOARD_SHORTCUTS } from '@/types/editor';
 import { useEditorSync } from '@/hooks/useEditorSync';
+import { importFilesToStore } from '@/lib/import-media';
 
 interface DragData {
   type: 'media' | 'clip';
@@ -32,11 +33,11 @@ interface DragData {
 }
 
 export default function Home() {
-  const { 
-    mediaLibrary, 
-    tracks, 
-    addClipToTrack, 
-    moveClip, 
+  const {
+    mediaLibrary,
+    tracks,
+    addClipToTrack,
+    moveClip,
     currentTime,
     duration,
     isPlaying,
@@ -52,18 +53,18 @@ export default function Home() {
     showShortcuts,
     setShowShortcuts,
   } = useEditorStore();
-  
+
   // IDE-to-Editor sync - enables OpenCode IDE to control the editor
   useEditorSync();
-  
+
   const [activeId, setActiveId] = useState<string | null>(null);
   const [dragData, setDragData] = useState<DragData | null>(null);
-  
+
   // Panel sizes
   const [leftPanelWidth, setLeftPanelWidth] = useState(260);
   const [rightPanelWidth, setRightPanelWidth] = useState(280);
   const [timelineHeight, setTimelineHeight] = useState(260);
-  
+
   // Resize refs
   const leftResizeRef = useRef<HTMLDivElement>(null);
   const rightResizeRef = useRef<HTMLDivElement>(null);
@@ -88,7 +89,9 @@ export default function Home() {
         const newWidth = Math.max(200, Math.min(400, window.innerWidth - e.clientX));
         setRightPanelWidth(newWidth);
       } else if (isResizingTimeline.current) {
-        const newHeight = Math.max(150, Math.min(400, window.innerHeight - 48 - e.clientY));
+        // Calculate new timeline height based on mouse distance from the bottom of the screen
+        const bottomOffset = window.innerHeight - e.clientY;
+        const newHeight = Math.max(100, Math.min(window.innerHeight * 0.8, bottomOffset));
         setTimelineHeight(newHeight);
       }
     };
@@ -103,7 +106,7 @@ export default function Home() {
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-    
+
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
@@ -143,7 +146,7 @@ export default function Home() {
 
     const data = active.data.current as DragData;
     const overData = over.data.current;
-    
+
     if (data?.type === 'media' && data.media) {
       const media = data.media;
       let targetTrackId: string | undefined;
@@ -163,13 +166,13 @@ export default function Home() {
       if (targetTrackId) {
         const track = tracks.find(t => t.id === targetTrackId);
         let newStartTime = 0;
-        
+
         if (track && track.clips.length > 0) {
           const sortedClips = [...track.clips].sort((a, b) => a.startTime - b.startTime);
           const lastClip = sortedClips[sortedClips.length - 1];
           newStartTime = lastClip.startTime + lastClip.duration;
         }
-        
+
         newStartTime = getSnappedTime(newStartTime);
         saveToHistory();
         addClipToTrack(targetTrackId, {
@@ -183,15 +186,15 @@ export default function Home() {
     } else if (data?.type === 'clip' && data.clipId) {
       const clip = getClipById(data.clipId);
       if (!clip) return;
-      
+
       const newStartTime = Math.max(0, clip.startTime + delta.x / zoom);
       const snappedTime = getSnappedTime(newStartTime, data.clipId);
-      
+
       let newTrackId = data.trackId;
       if (overData?.type === 'track' && overData.trackId !== data.trackId) {
         newTrackId = overData.trackId;
       }
-      
+
       if (snappedTime !== clip.startTime || newTrackId !== data.trackId) {
         saveToHistory();
         moveClip(data.clipId, snappedTime, newTrackId);
@@ -235,14 +238,14 @@ export default function Home() {
         if (e.shiftKey) {
           state.setCurrentTime(Math.max(0, state.currentTime - 5));
         } else {
-          state.setCurrentTime(Math.max(0, state.currentTime - 1/30));
+          state.setCurrentTime(Math.max(0, state.currentTime - 1 / 30));
         }
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         if (e.shiftKey) {
           state.setCurrentTime(Math.min(state.duration, state.currentTime + 5));
         } else {
-          state.setCurrentTime(Math.min(state.duration, state.currentTime + 1/30));
+          state.setCurrentTime(Math.min(state.duration, state.currentTime + 1 / 30));
         }
       } else if (e.key === 'Home') {
         e.preventDefault();
@@ -263,6 +266,26 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setShowShortcuts]);
 
+  // Global drag and drop handler to import files dropped anywhere in the app
+  useEffect(() => {
+    const handleGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    const handleGlobalDrop = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        importFilesToStore(Array.from(e.dataTransfer.files), useEditorStore.getState().addMedia);
+      }
+    };
+    window.addEventListener('dragover', handleGlobalDragOver);
+    window.addEventListener('drop', handleGlobalDrop);
+
+    return () => {
+      window.removeEventListener('dragover', handleGlobalDragOver);
+      window.removeEventListener('drop', handleGlobalDrop);
+    };
+  }, []);
+
   const aspectRatios: { value: AspectRatio; label: string }[] = [
     { value: '16:9', label: '16:9' },
     { value: '9:16', label: '9:16' },
@@ -282,12 +305,11 @@ export default function Home() {
               <span className="font-semibold text-sm">Video Editor Pro</span>
             </div>
             <div className="h-4 w-px bg-gray-700" />
-            <button className="flex items-center gap-1 text-sm text-gray-300 hover:text-white transition-colors">
+            <span className="flex items-center gap-1 text-sm text-gray-300">
               Untitled Project
-              <ChevronDown className="w-4 h-4" />
-            </button>
+            </span>
           </div>
-          
+
           <div className="flex items-center gap-3">
             {/* Aspect Ratio */}
             <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1">
@@ -295,19 +317,18 @@ export default function Home() {
                 <button
                   key={ar.value}
                   onClick={() => setAspectRatio(ar.value)}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${
-                    aspectRatio === ar.value ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'
-                  }`}
+                  className={`px-2 py-1 text-xs rounded transition-colors ${aspectRatio === ar.value ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'
+                    }`}
                 >
                   {ar.label}
                 </button>
               ))}
             </div>
-            
+
             <Button variant="ghost" size="icon" onClick={() => setShowShortcuts(true)} className="text-gray-400 hover:text-white">
               <Keyboard className="w-4 h-4" />
             </Button>
-            
+
             <Button className="bg-purple-600 hover:bg-purple-700 text-white gap-2 h-8 text-sm">
               <Download className="w-4 h-4" />
               Export
@@ -318,7 +339,7 @@ export default function Home() {
         {/* Main Content - Fixed height calculation */}
         <div className="flex-1 flex min-h-0" style={{ height: 'calc(100vh - 48px)' }}>
           {/* Left Panel */}
-          <div className="flex-shrink-0 border-r border-gray-700 overflow-hidden flex" style={{ width: leftPanelWidth }}>
+          <div className="flex-shrink-0 border-r border-gray-700 overflow-hidden flex flex-col" style={{ width: leftPanelWidth }}>
             <MediaLibrary />
             {/* Resize handle */}
             <div
@@ -338,15 +359,15 @@ export default function Home() {
               {/* Timeline resize handle */}
               <div
                 ref={timelineResizeRef}
-                className="h-1.5 bg-gray-700 hover:bg-purple-500 cursor-ns-resize flex-shrink-0 transition-colors group flex items-center justify-center"
+                className="h-3 bg-gray-900 border-y border-gray-700 hover:border-purple-500 hover:bg-purple-500/20 cursor-ns-resize flex-shrink-0 transition-all group flex items-center justify-center relative z-50"
                 onMouseDown={startResizingTimeline}
               >
-                <div className="w-12 h-1 bg-gray-600 rounded-full group-hover:bg-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="w-12 h-1 bg-gray-600 group-hover:bg-purple-400 rounded-full transition-colors" />
               </div>
             </div>
 
             {/* Timeline - Variable height */}
-            <div className="flex-shrink-0 border-t border-gray-700" style={{ height: timelineHeight }}>
+            <div className="flex-shrink-0" style={{ height: timelineHeight }}>
               <Timeline />
             </div>
           </div>

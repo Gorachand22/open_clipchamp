@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import {
-  Video, Image, Music, Upload, Search, Clock,
+  Video, Image, Music, Upload, Search, Clock, X,
   FileVideo, FileImage, FileAudio, Mic, Monitor, Camera, Type, Sparkles, Palette,
   Wand2, Sticker, Film, Play, Headphones, Subtitles, LayoutTemplate,
 } from 'lucide-react';
@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { useEditorStore } from '@/store/editorStore';
 import type { MediaItem, MediaType } from '@/types/editor';
 import { formatTimeShort, motionPresets, stickersLibrary, transitions, textAnimations, colorGradePresets } from '@/types/editor';
+import { importFilesToStore } from '@/lib/import-media';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -62,9 +63,10 @@ interface DraggableMediaItemProps {
   media: MediaItem;
   isSelected: boolean;
   onClick: () => void;
+  onDelete: (e: React.MouseEvent) => void;
 }
 
-function DraggableMediaItem({ media, isSelected, onClick }: DraggableMediaItemProps) {
+function DraggableMediaItem({ media, isSelected, onClick, onDelete }: DraggableMediaItemProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `media-${media.id}`,
     data: { type: 'media', media },
@@ -110,6 +112,18 @@ function DraggableMediaItem({ media, isSelected, onClick }: DraggableMediaItemPr
         ) : (
           <div className="flex items-center justify-center">{getIcon()}</div>
         )}
+
+        {/* Delete button (visible on hover) */}
+        <button
+          onPointerDown={(e) => {
+            // Must catch pointer down to prevent drag start
+            e.stopPropagation();
+          }}
+          onClick={onDelete}
+          className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-red-500/80 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
+        >
+          <X className="w-3 h-3 text-white" />
+        </button>
       </div>
       <div className="px-1.5 py-1 bg-gray-800/90">
         <p className="text-[10px] text-white truncate">{media.name}</p>
@@ -120,7 +134,7 @@ function DraggableMediaItem({ media, isSelected, onClick }: DraggableMediaItemPr
 }
 
 function YourMediaTab() {
-  const { mediaLibrary, selectedMediaId, selectMedia, addMedia } = useEditorStore();
+  const { mediaLibrary, selectedMediaId, selectMedia, addMedia, removeMedia } = useEditorStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<MediaType | 'all'>('all');
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -132,20 +146,29 @@ function YourMediaTab() {
     return matchesSearch && matchesType;
   });
 
-  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDraggingOver(true); };
-  const handleDragLeave = () => setIsDraggingOver(false);
+  useEffect(() => {
+    const handleGlobalDragOver = (e: DragEvent) => e.preventDefault();
+    const handleGlobalDrop = (e: DragEvent) => e.preventDefault();
+    window.addEventListener('dragover', handleGlobalDragOver);
+    window.addEventListener('drop', handleGlobalDrop);
+    return () => {
+      window.removeEventListener('dragover', handleGlobalDragOver);
+      window.removeEventListener('drop', handleGlobalDrop);
+    };
+  }, []);
+
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDraggingOver(true); };
+  const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDraggingOver(false); };
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDraggingOver(false);
     const files = Array.from(e.dataTransfer.files);
     handleFiles(files);
   };
 
   const handleFiles = (files: File[]) => {
-    files.forEach(file => {
-      const type: MediaType = file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : file.type.startsWith('image/') ? 'image' : 'video';
-      addMedia({ name: file.name, type, duration: type === 'image' ? 5 : 10, thumbnail: undefined, src: URL.createObjectURL(file), file });
-    });
+    importFilesToStore(files, addMedia);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -154,7 +177,12 @@ function YourMediaTab() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className={cn("flex-1 w-full min-h-0 flex flex-col h-full rounded transition-all", isDraggingOver ? 'bg-purple-900/20 ring-2 ring-purple-500 ring-inset' : '')}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <div className="p-1.5">
         <Button className="w-full bg-purple-600 hover:bg-purple-700 text-white gap-1.5 h-7 text-[11px]" onClick={() => fileInputRef.current?.click()}>
           <Upload className="w-3 h-3" /> Import
@@ -164,7 +192,7 @@ function YourMediaTab() {
 
       <div className="px-1.5 pb-1.5 flex gap-1">
         <div className="relative flex-1">
-          <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500" />
+          <Search className="absolute left-1.5 top-1.5 w-3 h-3 text-gray-500 pointer-events-none" />
           <Input placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-6 bg-gray-800 border-gray-700 text-white text-[10px] h-6" />
         </div>
         <Select value={filterType} onValueChange={(v) => setFilterType(v as MediaType | 'all')}>
@@ -180,16 +208,26 @@ function YourMediaTab() {
         </Select>
       </div>
 
-      <div className={cn('mx-1.5 mb-1.5 p-2 border border-dashed rounded text-center transition-colors', isDraggingOver ? 'border-purple-500 bg-purple-500/10' : 'border-gray-700 hover:border-gray-600')}
-        onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      <div className={cn('mx-1.5 mb-1.5 p-2 border border-dashed rounded text-center transition-colors pointer-events-none', isDraggingOver ? 'border-purple-500 bg-purple-500/10' : 'border-gray-700')}
+      >
         <Upload className="w-3 h-3 mx-auto mb-0.5 text-gray-500" />
-        <p className="text-[9px] text-gray-500">Drop files</p>
+        <p className="text-[9px] text-gray-500">Drop files anywhere</p>
       </div>
 
       <ScrollArea className="flex-1 px-1.5">
         <div className="grid grid-cols-2 gap-1">
           {filteredMedia.map((media) => (
-            <DraggableMediaItem key={media.id} media={media} isSelected={selectedMediaId === media.id} onClick={() => selectMedia(media.id)} />
+            <DraggableMediaItem
+              key={media.id}
+              media={media}
+              isSelected={selectedMediaId === media.id}
+              onClick={() => selectMedia(media.id)}
+              onDelete={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                removeMedia(media.id);
+              }}
+            />
           ))}
         </div>
         {filteredMedia.length === 0 && (
@@ -200,30 +238,7 @@ function YourMediaTab() {
   );
 }
 
-function TemplatesTab() {
-  const { setAspectRatio } = useEditorStore();
-  
-  return (
-    <ScrollArea className="flex-1 p-1.5">
-      <div className="space-y-1">
-        <p className="text-[9px] text-gray-500 font-medium uppercase tracking-wider">Platforms</p>
-        <div className="space-y-0.5">
-          {templates.map((template) => (
-            <button 
-              key={template.id}
-              onClick={() => setAspectRatio(template.aspectRatio as '16:9' | '9:16' | '1:1' | '4:5' | '21:9')}
-              className="w-full flex items-center gap-2 p-1.5 bg-gray-800/50 hover:bg-gray-800 rounded border border-transparent hover:border-gray-700 transition-colors"
-            >
-              <span className="text-sm w-5 text-center">{template.icon}</span>
-              <span className="text-[10px] text-gray-300 flex-1 text-left">{template.name}</span>
-              <span className="text-[9px] text-gray-600 tabular-nums">{template.aspectRatio}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </ScrollArea>
-  );
-}
+
 
 function TextTab() {
   const { addClipToTrack, tracks, currentTime } = useEditorStore();
@@ -242,9 +257,9 @@ function TextTab() {
           <p className="text-[9px] text-gray-500 font-medium uppercase tracking-wider mb-1">Styles</p>
           <div className="grid grid-cols-2 gap-1">
             {textPresets.map((preset) => (
-              <button 
-                key={preset.id} 
-                onClick={() => handleAddText(preset)} 
+              <button
+                key={preset.id}
+                onClick={() => handleAddText(preset)}
                 className="p-1.5 bg-gray-800/50 hover:bg-gray-800 rounded border border-transparent hover:border-gray-700 text-left transition-colors"
               >
                 <span className={cn("text-sm text-white", preset.style === 'bold' && "font-bold")}>{preset.preview}</span>
@@ -253,7 +268,7 @@ function TextTab() {
             ))}
           </div>
         </div>
-        
+
         <div>
           <p className="text-[9px] text-gray-500 font-medium uppercase tracking-wider mb-1">Animations</p>
           <div className="flex flex-wrap gap-0.5">
@@ -315,7 +330,7 @@ function EffectsTab() {
             ))}
           </div>
         </div>
-        
+
         <div>
           <p className="text-[9px] text-gray-500 font-medium uppercase tracking-wider mb-1">Effects</p>
           <div className="grid grid-cols-3 gap-0.5">
@@ -329,7 +344,7 @@ function EffectsTab() {
             ))}
           </div>
         </div>
-        
+
         <div>
           <p className="text-[9px] text-gray-500 font-medium uppercase tracking-wider mb-1">Colors</p>
           <div className="grid grid-cols-4 gap-0.5">
@@ -350,7 +365,7 @@ function EffectsTab() {
 
 function MusicTab() {
   const [selectedGenre, setSelectedGenre] = useState<string>('all');
-  
+
   return (
     <ScrollArea className="flex-1 p-1.5">
       <div className="space-y-1.5">
@@ -388,7 +403,7 @@ function MusicTab() {
             ))}
           </div>
         </div>
-        
+
         <div>
           <p className="text-[9px] text-gray-500 font-medium uppercase tracking-wider mb-1">SFX</p>
           <div className="grid grid-cols-2 gap-0.5">
@@ -411,9 +426,9 @@ function MusicTab() {
 function StickersTab() {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const categories = ['all', 'emoji', 'shapes', 'arrows'];
-  
-  const filteredStickers = selectedCategory === 'all' 
-    ? stickersLibrary 
+
+  const filteredStickers = selectedCategory === 'all'
+    ? stickersLibrary
     : stickersLibrary.filter(s => s.category === selectedCategory);
 
   return (
@@ -433,7 +448,7 @@ function StickersTab() {
             </button>
           ))}
         </div>
-        
+
         <div className="grid grid-cols-5 gap-0.5">
           {filteredStickers.slice(0, 20).map((sticker) => (
             <button
@@ -541,7 +556,6 @@ export default function MediaLibrary() {
 
   const tabs = [
     { id: 'your-media', label: 'Media', icon: <Video className="w-3 h-3" /> },
-    { id: 'templates', label: 'Templates', icon: <LayoutTemplate className="w-3 h-3" /> },
     { id: 'text', label: 'Text', icon: <Type className="w-3 h-3" /> },
     { id: 'transitions', label: 'Trans', icon: <Film className="w-3 h-3" /> },
     { id: 'effects', label: 'Effects', icon: <Sparkles className="w-3 h-3" /> },
@@ -553,7 +567,7 @@ export default function MediaLibrary() {
   ];
 
   return (
-    <div className="h-full flex flex-col bg-gray-900">
+    <div className="flex-1 w-full min-h-0 h-full flex flex-col bg-gray-900 border-l border-gray-800">
       {/* Compact Tabs */}
       <div className="p-0.5 border-b border-gray-800 bg-gray-900/50">
         <div className="grid grid-cols-5 gap-0.5">
@@ -563,8 +577,8 @@ export default function MediaLibrary() {
               onClick={() => setActiveMediaTab(tab.id)}
               className={cn(
                 'flex flex-col items-center gap-0.5 p-1 rounded transition-colors',
-                activeMediaTab === tab.id 
-                  ? 'bg-purple-600 text-white' 
+                activeMediaTab === tab.id
+                  ? 'bg-purple-600 text-white'
                   : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
               )}
               title={tab.label}
@@ -577,9 +591,8 @@ export default function MediaLibrary() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
         {activeMediaTab === 'your-media' && <YourMediaTab />}
-        {activeMediaTab === 'templates' && <TemplatesTab />}
         {activeMediaTab === 'text' && <TextTab />}
         {activeMediaTab === 'transitions' && <TransitionsTab />}
         {activeMediaTab === 'effects' && <EffectsTab />}

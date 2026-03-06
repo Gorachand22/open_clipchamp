@@ -1,611 +1,277 @@
 /**
- * MCP (Model Context Protocol) Server Endpoint
- * 
- * Complete MCP tools for OpenCode IDE to control Video Editor Pro.
- * Includes: AI generation, YouTube, Video editing, Manim, Editor control, Remotion
- * 
- * RATE LIMITING:
- * - z-ai tools: Wait 3 minutes after 429 errors
- * - Grok tools: ~4 generations per day limit
+ * MCP (Model Context Protocol) Server Endpoint - JSON-RPC 2.0
+ *
+ * Implements the MCP wire protocol so OpenCode can connect via:
+ *   "mcp": { "video-editor": { "type": "remote", "url": "http://localhost:3000/api/mcp" } }
+ *
+ * Protocol: Streamable HTTP (POST JSON-RPC 2.0 messages)
+ * Spec: https://spec.modelcontextprotocol.io
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { ensureFolders, checkAllDependencies } from '@/lib/mcp-tools';
 import { editorControlTools } from '@/lib/editor-control';
 
-// Import all tools
 import {
-  // Z-AI Generation
   text_to_image,
   text_to_video,
   image_to_video,
   check_generation_status,
   text_to_speech,
-  // Grok Extension
+  list_voices,
   text_to_image_grok,
   text_to_video_grok,
   image_to_video_grok,
-  // YouTube
   download_youtube,
   get_youtube_transcript,
-  // Video Editing
   trim_clip,
   reframe,
   add_captions,
-  // Manim
   generate_animation,
+  render_remotion,
+  VALID_SIZES,
+  SIZE_TO_ASPECT_RATIO,
   type ToolResult,
 } from '@/lib/mcp-tools';
 
-// Tool definitions for MCP discovery
-const TOOLS = [
-  // ============================================================
-  // EDITOR CONTROL TOOLS - Real-time IDE-to-Editor interaction
-  // ============================================================
-  {
-    name: 'get_editor_state',
-    description: 'Get current editor state snapshot including timeline, clips, tracks, playback position. Use this to see what the editor looks like.',
-    category: 'editor',
-    parameters: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'set_playhead',
-    description: 'Move the playhead (current time indicator) to a specific time in seconds.',
-    category: 'editor',
-    parameters: {
-      type: 'object',
-      properties: { time: { type: 'number', description: 'Time in seconds' } },
-      required: ['time']
-    }
-  },
-  {
-    name: 'start_playback',
-    description: 'Start video playback from current position.',
-    category: 'editor',
-    parameters: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'pause_playback',
-    description: 'Pause video playback.',
-    category: 'editor',
-    parameters: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'set_aspect_ratio',
-    description: 'Change project aspect ratio (16:9, 9:16, 1:1, 4:5, 21:9) for different platforms.',
-    category: 'editor',
-    parameters: {
-      type: 'object',
-      properties: { ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:5', '21:9'] } },
-      required: ['ratio']
-    }
-  },
-  {
-    name: 'add_track',
-    description: 'Add a new track to the timeline (video, audio, or overlay).',
-    category: 'editor',
-    parameters: {
-      type: 'object',
-      properties: { trackType: { type: 'string', enum: ['video', 'audio', 'overlay'] } },
-      required: ['trackType']
-    }
-  },
-  {
-    name: 'add_clip',
-    description: 'Add a clip to the timeline. Can specify track or auto-select based on media type.',
-    category: 'editor',
-    parameters: {
-      type: 'object',
-      properties: {
-        trackId: { type: 'string', description: 'Optional: target track ID' },
-        mediaId: { type: 'string', description: 'Unique media identifier' },
-        mediaName: { type: 'string', description: 'Display name' },
-        mediaType: { type: 'string', enum: ['video', 'audio', 'image'] },
-        startTime: { type: 'number', description: 'Start time in seconds (default: end of track)' },
-        duration: { type: 'number', description: 'Clip duration in seconds' },
-        src: { type: 'string', description: 'Media source URL' },
-        thumbnail: { type: 'string', description: 'Thumbnail URL' }
-      },
-      required: ['mediaId', 'mediaName', 'mediaType', 'duration']
-    }
-  },
-  {
-    name: 'remove_clip',
-    description: 'Remove a clip from the timeline.',
-    category: 'editor',
-    parameters: {
-      type: 'object',
-      properties: { clipId: { type: 'string' } },
-      required: ['clipId']
-    }
-  },
-  {
-    name: 'move_clip',
-    description: 'Move a clip to a new position on the timeline.',
-    category: 'editor',
-    parameters: {
-      type: 'object',
-      properties: {
-        clipId: { type: 'string' },
-        startTime: { type: 'number', description: 'New start time in seconds' },
-        targetTrackId: { type: 'string', description: 'Optional: move to different track' }
-      },
-      required: ['clipId', 'startTime']
-    }
-  },
-  {
-    name: 'set_clip_speed',
-    description: 'Change clip playback speed (0.5 = half speed, 2 = double speed).',
-    category: 'editor',
-    parameters: {
-      type: 'object',
-      properties: { clipId: { type: 'string' }, speed: { type: 'number', description: 'Speed multiplier (0.1-10)' } },
-      required: ['clipId', 'speed']
-    }
-  },
-  {
-    name: 'add_generated_content',
-    description: 'Add AI-generated content (image/video/audio) directly to the timeline.',
-    category: 'editor',
-    parameters: {
-      type: 'object',
-      properties: {
-        type: { type: 'string', enum: ['video', 'audio', 'image'] },
-        name: { type: 'string' },
-        src: { type: 'string', description: 'URL to generated content' },
-        thumbnail: { type: 'string' },
-        duration: { type: 'number' },
-        startTime: { type: 'number' }
-      },
-      required: ['type', 'name', 'src', 'duration']
-    }
-  },
-  {
-    name: 'split_clip',
-    description: 'Split the clip at the current playhead position.',
-    category: 'editor',
-    parameters: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'undo_action',
-    description: 'Undo the last action.',
-    category: 'editor',
-    parameters: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'redo_action',
-    description: 'Redo the last undone action.',
-    category: 'editor',
-    parameters: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'clear_timeline',
-    description: 'Clear all clips from the timeline.',
-    category: 'editor',
-    parameters: { type: 'object', properties: {}, required: [] }
-  },
+// ============================================================
+// MCP TOOL DEFINITIONS (inputSchema = JSON Schema)
+// ============================================================
+const MCP_TOOLS = [
+  // --- Editor Control ---
+  { name: 'get_editor_state', description: 'Get current editor state (timeline, clips, tracks, playhead position).', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'set_playhead', description: 'Move playhead to a specific time in seconds.', inputSchema: { type: 'object', properties: { time: { type: 'number' } }, required: ['time'] } },
+  { name: 'start_playback', description: 'Start video playback.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'pause_playback', description: 'Pause video playback.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'set_aspect_ratio', description: 'Set project aspect ratio.', inputSchema: { type: 'object', properties: { ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:5', '21:9'] } }, required: ['ratio'] } },
+  { name: 'add_track', description: 'Add a new track to the timeline.', inputSchema: { type: 'object', properties: { trackType: { type: 'string', enum: ['video', 'audio', 'overlay'] } }, required: ['trackType'] } },
+  { name: 'add_clip', description: 'Add a clip to the timeline.', inputSchema: { type: 'object', properties: { trackId: { type: 'string' }, mediaId: { type: 'string' }, mediaName: { type: 'string' }, mediaType: { type: 'string', enum: ['video', 'audio', 'image'] }, startTime: { type: 'number' }, duration: { type: 'number' }, src: { type: 'string' }, thumbnail: { type: 'string' } }, required: ['mediaId', 'mediaName', 'mediaType', 'duration'] } },
+  { name: 'remove_clip', description: 'Remove a clip from the timeline.', inputSchema: { type: 'object', properties: { clipId: { type: 'string' } }, required: ['clipId'] } },
+  { name: 'move_clip', description: 'Move a clip to a new timeline position.', inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, startTime: { type: 'number' }, targetTrackId: { type: 'string' } }, required: ['clipId', 'startTime'] } },
+  { name: 'set_clip_speed', description: 'Change clip playback speed.', inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, speed: { type: 'number' } }, required: ['clipId', 'speed'] } },
+  { name: 'set_clip_volume', description: 'Set clip volume (0-1).', inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, volume: { type: 'number' } }, required: ['clipId', 'volume'] } },
+  { name: 'set_clip_fade', description: 'Set fade in/out on clip.', inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, fadeIn: { type: 'number' }, fadeOut: { type: 'number' } }, required: ['clipId'] } },
+  { name: 'set_clip_filter', description: 'Apply visual filter to clip.', inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, filter: { type: 'string' } }, required: ['clipId', 'filter'] } },
+  { name: 'set_clip_color_grade', description: 'Apply color grading to clip.', inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, settings: { type: 'object' } }, required: ['clipId', 'settings'] } },
+  { name: 'set_clip_animation', description: 'Set entrance/exit animation on clip.', inputSchema: { type: 'object', properties: { clipId: { type: 'string' }, entrance: { type: 'string' }, exit: { type: 'string' } }, required: ['clipId'] } },
+  { name: 'split_clip', description: 'Split the selected clip at the current playhead position.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'delete_selected_clip', description: 'Delete the currently selected clip.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'select_clip', description: 'Select a clip by ID.', inputSchema: { type: 'object', properties: { clipId: { type: 'string' } }, required: [] } },
+  { name: 'add_marker', description: 'Add a timeline marker.', inputSchema: { type: 'object', properties: { time: { type: 'number' }, label: { type: 'string' }, color: { type: 'string' } }, required: ['time', 'label'] } },
+  { name: 'add_caption', description: 'Add a caption overlay at a specific time.', inputSchema: { type: 'object', properties: { startTime: { type: 'number' }, endTime: { type: 'number' }, text: { type: 'string' } }, required: ['startTime', 'endTime', 'text'] } },
+  { name: 'import_media', description: 'Import a media file into the editor.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, type: { type: 'string' }, src: { type: 'string' }, duration: { type: 'number' }, thumbnail: { type: 'string' } }, required: ['name', 'type', 'src', 'duration'] } },
+  { name: 'add_generated_content', description: 'Add AI-generated content (image/video/audio) to the timeline.', inputSchema: { type: 'object', properties: { type: { type: 'string', enum: ['video', 'audio', 'image'] }, name: { type: 'string' }, src: { type: 'string' }, thumbnail: { type: 'string' }, duration: { type: 'number' }, startTime: { type: 'number' } }, required: ['type', 'name', 'src', 'duration'] } },
+  { name: 'undo_action', description: 'Undo the last editor action.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'redo_action', description: 'Redo the last undone action.', inputSchema: { type: 'object', properties: {}, required: [] } },
+  { name: 'clear_timeline', description: 'Clear all clips from the timeline.', inputSchema: { type: 'object', properties: {}, required: [] } },
 
-  // ============================================================
-  // Z-AI GENERATION TOOLS
-  // ============================================================
-  {
-    name: 'text_to_image',
-    description: 'Generate image from text prompt using z-ai. Returns image URL.',
-    category: 'ai-generation',
-    parameters: {
-      type: 'object',
-      properties: {
-        prompt: { type: 'string', description: 'Text description for image' },
-        size: { type: 'string', default: '1024x1024', enum: ['1024x1024', '768x1344', '1344x768'] }
-      },
-      required: ['prompt']
-    },
-    rateLimitNote: 'Wait 3 minutes if 429 error'
-  },
-  {
-    name: 'text_to_video',
-    description: 'Generate video from text prompt. Returns task ID for polling.',
-    category: 'ai-generation',
-    parameters: {
-      type: 'object',
-      properties: {
-        prompt: { type: 'string', description: 'Text description for video' },
-        size: { type: 'string', default: '768x1344' },
-        duration: { type: 'number', default: 5, enum: [5, 10] },
-        quality: { type: 'string', default: 'speed', enum: ['speed', 'quality'] }
-      },
-      required: ['prompt']
-    },
-    rateLimitNote: 'Wait 3 minutes if 429 error'
-  },
-  {
-    name: 'image_to_video',
-    description: 'Generate video from an image + prompt.',
-    category: 'ai-generation',
-    parameters: {
-      type: 'object',
-      properties: {
-        prompt: { type: 'string', description: 'Animation description' },
-        imageUrl: { type: 'string', description: 'Image URL, base64, or file path' },
-        duration: { type: 'number', default: 5 }
-      },
-      required: ['prompt', 'imageUrl']
-    }
-  },
-  {
-    name: 'check_generation_status',
-    description: 'Check status of video generation task. Returns video URL when complete.',
-    category: 'ai-generation',
-    parameters: {
-      type: 'object',
-      properties: { taskId: { type: 'string' } },
-      required: ['taskId']
-    }
-  },
-  {
-    name: 'text_to_speech',
-    description: 'Convert text to speech audio.',
-    category: 'ai-generation',
-    parameters: {
-      type: 'object',
-      properties: {
-        text: { type: 'string' },
-        voiceId: { type: 'string' },
-        speed: { type: 'number', default: 1.0 }
-      },
-      required: ['text', 'voiceId']
-    }
-  },
+  // --- AI Generation ---
+  { name: 'text_to_image', description: 'Generate image from text prompt. Returns image URL. Sizes: 1024x1024 (1:1), 768x1344 (9:16 Shorts), 1344x768 (16:9 YouTube).', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, size: { type: 'string', enum: ['1024x1024', '768x1344', '1344x768', '864x1152', '720x1440', '1152x864', '1440x720'], default: '1024x1024' } }, required: ['prompt'] } },
+  { name: 'text_to_video', description: 'Generate video from text prompt. Returns taskId. Poll check_generation_status every 5-10s for result.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, size: { type: 'string', enum: ['768x1344', '1344x768', '1024x1024'], default: '768x1344' }, duration: { type: 'number', enum: [5, 10], default: 5 }, quality: { type: 'string', enum: ['speed', 'quality'], default: 'speed' } }, required: ['prompt'] } },
+  { name: 'image_to_video', description: 'Animate an image into a video. Provide imageUrl and animation prompt.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, imageUrl: { type: 'string' }, size: { type: 'string', enum: ['768x1344', '1344x768', '1024x1024'], default: '768x1344' }, duration: { type: 'number', enum: [5, 10], default: 5 }, quality: { type: 'string', enum: ['speed', 'quality'], default: 'speed' } }, required: ['prompt', 'imageUrl'] } },
+  { name: 'check_generation_status', description: 'Poll status of a video generation task. Returns status (PROCESSING/SUCCESS/FAIL) and video URL when done.', inputSchema: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] } },
+  { name: 'text_to_speech', description: 'Convert text to speech audio. Use list_voices first to get voice IDs.', inputSchema: { type: 'object', properties: { text: { type: 'string' }, voiceId: { type: 'string' }, speed: { type: 'number', default: 1.0 } }, required: ['text', 'voiceId'] } },
+  { name: 'list_voices', description: 'List available TTS voices (system and cloned). Call before text_to_speech.', inputSchema: { type: 'object', properties: {}, required: [] } },
 
-  // ============================================================
-  // GROK EXTENSION TOOLS (fallback, ~4/day limit)
-  // ============================================================
-  {
-    name: 'text_to_image_grok',
-    description: 'Generate image using Grok extension. LIMIT: ~4/day',
-    category: 'grok',
-    parameters: {
-      type: 'object',
-      properties: { prompt: { type: 'string' }, aspectRatio: { type: 'string', default: '16:9' } },
-      required: ['prompt']
-    }
-  },
-  {
-    name: 'text_to_video_grok',
-    description: 'Generate video using Grok extension. LIMIT: ~4/day',
-    category: 'grok',
-    parameters: {
-      type: 'object',
-      properties: { prompt: { type: 'string' }, aspectRatio: { type: 'string', default: '16:9' } },
-      required: ['prompt']
-    }
-  },
+  // --- Grok Fallback ---
+  { name: 'text_to_image_grok', description: 'Generate image using Grok. LIMIT: ~4/day. Use as fallback.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, aspectRatio: { type: 'string', default: '16:9' } }, required: ['prompt'] } },
+  { name: 'text_to_video_grok', description: 'Generate video using Grok. LIMIT: ~4/day. Use as fallback.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, aspectRatio: { type: 'string', default: '16:9' } }, required: ['prompt'] } },
 
-  // ============================================================
-  // YOUTUBE TOOLS
-  // ============================================================
-  {
-    name: 'download_youtube',
-    description: 'Download YouTube video with metadata and transcript.',
-    category: 'youtube',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'YouTube video URL' },
-        separateAudio: { type: 'boolean', default: true }
-      },
-      required: ['url']
-    }
-  },
-  {
-    name: 'get_youtube_transcript',
-    description: 'Fetch transcript/subtitles for a YouTube video.',
-    category: 'youtube',
-    parameters: {
-      type: 'object',
-      properties: { videoId: { type: 'string', description: 'YouTube video ID (11 chars)' } },
-      required: ['videoId']
-    }
-  },
+  // --- YouTube ---
+  { name: 'download_youtube', description: 'Download YouTube video. Returns video path, metadata, transcript.', inputSchema: { type: 'object', properties: { url: { type: 'string' }, format: { type: 'string', enum: ['video', 'audio', 'both'], default: 'both' }, quality: { type: 'string', enum: ['best', 'medium', 'low'], default: 'best' } }, required: ['url'] } },
+  { name: 'get_youtube_transcript', description: 'Get timestamped transcript/subtitles for a YouTube video.', inputSchema: { type: 'object', properties: { videoId: { type: 'string' }, languages: { type: 'array', items: { type: 'string' }, default: ['en', 'hi'] } }, required: ['videoId'] } },
 
-  // ============================================================
-  // VIDEO EDITING TOOLS (ffmpeg-based)
-  // ============================================================
-  {
-    name: 'trim_clip',
-    description: 'Trim video from start to end time.',
-    category: 'video-editing',
-    parameters: {
-      type: 'object',
-      properties: {
-        videoPath: { type: 'string' },
-        start: { type: 'number', description: 'Start time in seconds' },
-        end: { type: 'number', description: 'End time in seconds' }
-      },
-      required: ['videoPath', 'start', 'end']
-    }
-  },
-  {
-    name: 'reframe',
-    description: 'Convert video aspect ratio (e.g., 16:9 to 9:16 for TikTok).',
-    category: 'video-editing',
-    parameters: {
-      type: 'object',
-      properties: {
-        videoPath: { type: 'string' },
-        targetRatio: { type: 'string', enum: ['9:16', '16:9', '1:1', '4:5'] }
-      },
-      required: ['videoPath', 'targetRatio']
-    }
-  },
-  {
-    name: 'add_captions',
-    description: 'Burn subtitles into video.',
-    category: 'video-editing',
-    parameters: {
-      type: 'object',
-      properties: {
-        videoPath: { type: 'string' },
-        transcript: { type: 'array', description: 'Array of {text, start, duration}' }
-      },
-      required: ['videoPath', 'transcript']
-    }
-  },
+  // --- Video Editing ---
+  { name: 'trim_clip', description: 'Trim video to start/end time using ffmpeg.', inputSchema: { type: 'object', properties: { videoPath: { type: 'string' }, start: { type: 'number' }, end: { type: 'number' } }, required: ['videoPath', 'start', 'end'] } },
+  { name: 'reframe', description: 'Convert video aspect ratio (e.g. 16:9 to 9:16 for TikTok).', inputSchema: { type: 'object', properties: { videoPath: { type: 'string' }, targetRatio: { type: 'string', enum: ['9:16', '16:9', '1:1', '4:5'] } }, required: ['videoPath', 'targetRatio'] } },
+  { name: 'add_captions', description: 'Burn subtitles/captions into video using transcript data.', inputSchema: { type: 'object', properties: { videoPath: { type: 'string' }, transcript: { type: 'array', items: { type: 'object' } } }, required: ['videoPath', 'transcript'] } },
 
-  // ============================================================
-  // MANIM TOOL
-  // ============================================================
-  {
-    name: 'generate_animation',
-    description: 'Create math/technical animation using Manim (Python).',
-    category: 'manim',
-    parameters: {
-      type: 'object',
-      properties: {
-        script: { type: 'string', description: 'Manim Python code (construct method body)' },
-        quality: { type: 'string', default: 'm', enum: ['l', 'm', 'h'] }
-      },
-      required: ['script']
-    }
-  },
+  // --- Manim ---
+  { name: 'generate_animation', description: 'Create math/technical animation using Manim Python. Returns rendered MP4.', inputSchema: { type: 'object', properties: { script: { type: 'string', description: 'Manim construct() method body' }, quality: { type: 'string', enum: ['l', 'm', 'h'], default: 'm' } }, required: ['script'] } },
 
-  // ============================================================
-  // RENDER TOOL
-  // ============================================================
-  {
-    name: 'render_video',
-    description: 'Render the current timeline to a video file. Use this to export the project.',
-    category: 'render',
-    parameters: {
-      type: 'object',
-      properties: {
-        aspectRatio: { type: 'string', default: '16:9', enum: ['16:9', '9:16', '1:1', '4:5', '21:9'] },
-        quality: { type: 'string', default: '1080p', enum: ['480p', '720p', '1080p', '4K'] },
-        fps: { type: 'number', default: 30, enum: [24, 30, 60] },
-        format: { type: 'string', default: 'mp4', enum: ['mp4', 'webm', 'gif'] }
-      },
-      required: []
-    }
-  }
+  // --- Remotion ---
+  { name: 'render_remotion', description: 'Render React-based video using Remotion.', inputSchema: { type: 'object', properties: { compositionId: { type: 'string' }, inputProps: { type: 'object' }, codec: { type: 'string', enum: ['h264', 'h265', 'vp8', 'vp9'], default: 'h264' }, fps: { type: 'number', default: 30 }, durationInFrames: { type: 'number' } }, required: ['compositionId'] } },
 ];
 
-// Ensure folders exist on module load
 ensureFolders();
+
+// ============================================================
+// MCP JSON-RPC 2.0 HANDLER
+// ============================================================
+
+function mcpResponse(id: string | number | null, result: unknown) {
+  return NextResponse.json({ jsonrpc: '2.0', id, result });
+}
+
+function mcpError(id: string | number | null, code: number, message: string) {
+  return NextResponse.json({ jsonrpc: '2.0', id, error: { code, message } });
+}
+
+async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  switch (name) {
+    // Editor Control
+    case 'get_editor_state': return editorControlTools.get_editor_state();
+    case 'set_playhead': return editorControlTools.set_playhead(args as any);
+    case 'start_playback': return editorControlTools.start_playback();
+    case 'pause_playback': return editorControlTools.pause_playback();
+    case 'set_aspect_ratio': return editorControlTools.set_aspect_ratio(args as any);
+    case 'add_track': return editorControlTools.add_track(args as any);
+    case 'add_clip': return editorControlTools.add_clip(args as any);
+    case 'remove_clip': return editorControlTools.remove_clip(args as any);
+    case 'move_clip': return editorControlTools.move_clip(args as any);
+    case 'set_clip_speed': return editorControlTools.set_clip_speed(args as any);
+    case 'set_clip_volume': return editorControlTools.set_clip_volume(args as any);
+    case 'set_clip_fade': return editorControlTools.set_clip_fade(args as any);
+    case 'set_clip_filter': return editorControlTools.set_clip_filter(args as any);
+    case 'set_clip_color_grade': return editorControlTools.set_clip_color_grade(args as any);
+    case 'set_clip_animation': return editorControlTools.set_clip_animation(args as any);
+    case 'split_clip': return editorControlTools.split_clip();
+    case 'delete_selected_clip': return editorControlTools.delete_selected_clip();
+    case 'select_clip': return editorControlTools.select_clip(args as any);
+    case 'add_marker': return editorControlTools.add_marker(args as any);
+    case 'add_caption': return editorControlTools.add_caption(args as any);
+    case 'import_media': return editorControlTools.import_media(args as any);
+    case 'add_generated_content': return editorControlTools.add_generated_content(args as any);
+    case 'undo_action': return editorControlTools.undo_action();
+    case 'redo_action': return editorControlTools.redo_action();
+    case 'clear_timeline': return editorControlTools.clear_timeline();
+
+    // AI Generation
+    case 'text_to_image': return text_to_image(args as any);
+    case 'text_to_video': return text_to_video(args as any);
+    case 'image_to_video': return image_to_video(args as any);
+    case 'check_generation_status': return check_generation_status(args as any);
+    case 'text_to_speech': return text_to_speech(args as any);
+    case 'list_voices': return list_voices();
+    case 'text_to_image_grok': return text_to_image_grok(args as any);
+    case 'text_to_video_grok': return text_to_video_grok(args as any);
+    case 'image_to_video_grok': return image_to_video_grok(args as any);
+
+    // YouTube
+    case 'download_youtube': return download_youtube(args as any);
+    case 'get_youtube_transcript': return get_youtube_transcript(args as any);
+
+    // Video Editing
+    case 'trim_clip': return trim_clip(args as any);
+    case 'reframe': return reframe(args as any);
+    case 'add_captions': return add_captions(args as any);
+
+    // Manim
+    case 'generate_animation': return generate_animation(args as any);
+
+    // Remotion
+    case 'render_remotion': return render_remotion(args as any);
+
+    default:
+      throw { code: -32601, message: `Unknown tool: ${name}` };
+  }
+}
+
+// ============================================================
+// ROUTE HANDLERS
+// ============================================================
+
+/**
+ * POST /api/mcp
+ * Handles all MCP JSON-RPC 2.0 messages from OpenCode
+ */
+export async function POST(request: NextRequest) {
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return mcpError(null, -32700, 'Parse error');
+  }
+
+  const { jsonrpc, id, method, params } = body;
+
+  if (jsonrpc !== '2.0') {
+    return mcpError(id ?? null, -32600, 'Invalid Request: must be JSON-RPC 2.0');
+  }
+
+  try {
+    switch (method) {
+      // --- MCP Lifecycle ---
+      case 'initialize':
+        return mcpResponse(id, {
+          protocolVersion: '2024-11-05',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'video-editor-pro', version: '3.0.0' },
+        });
+
+      case 'notifications/initialized':
+        // No-op notification — just acknowledge
+        return new NextResponse(null, { status: 204 });
+
+      // --- Tool Discovery ---
+      case 'tools/list':
+        return mcpResponse(id, { tools: MCP_TOOLS });
+
+      // --- Tool Execution ---
+      case 'tools/call': {
+        const toolName = params?.name;
+        const toolArgs = params?.arguments ?? {};
+
+        if (!toolName) {
+          return mcpError(id, -32602, 'Missing tool name in params');
+        }
+
+        const result = await executeTool(toolName, toolArgs);
+
+        // Format result as MCP content blocks
+        const content = [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ];
+
+        return mcpResponse(id, { content, isError: false });
+      }
+
+      // --- Ping (keep-alive) ---
+      case 'ping':
+        return mcpResponse(id, {});
+
+      default:
+        return mcpError(id, -32601, `Method not found: ${method}`);
+    }
+  } catch (error: any) {
+    console.error('[MCP] Error handling method:', method, error);
+    if (error?.code) {
+      return mcpError(id, error.code, error.message);
+    }
+    return mcpError(id, -32603, error?.message || 'Internal error');
+  }
+}
 
 /**
  * GET /api/mcp
- * List available tools (MCP discovery)
+ * Health check — returns server info (not part of MCP spec but useful for debugging)
  */
 export async function GET() {
+  const deps = await checkAllDependencies();
   return NextResponse.json({
-    name: 'Video Editor Pro - MCP Server',
+    service: 'Video Editor Pro - MCP Server',
     version: '3.0.0',
-    description: 'Complete AI-powered video editing tools for OpenCode IDE with real-time editor control',
-    tools: TOOLS,
-    categories: ['editor', 'ai-generation', 'grok', 'youtube', 'video-editing', 'manim', 'render'],
-    rateLimits: {
-      zai: '3 minutes between requests after 429 error',
-      grok: '~4 generations per day'
-    },
-    endpoints: {
-      tools: '/api/mcp',
-      editorState: '/api/editor/state',
-      editorEvents: '/api/editor/events',
-      render: '/api/render'
-    }
+    protocol: 'MCP JSON-RPC 2.0 (2024-11-05)',
+    tools: MCP_TOOLS.length,
+    dependencies: deps,
+    status: 'ok',
   });
 }
 
 /**
- * POST /api/mcp
- * Execute a tool
+ * OPTIONS /api/mcp
+ * CORS preflight for cross-origin requests from OpenCode
  */
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { tool, params } = body;
-
-    if (!tool) {
-      return NextResponse.json({ error: 'Tool name is required' }, { status: 400 });
-    }
-
-    let result: any;
-
-    // ============================================================
-    // EDITOR CONTROL TOOLS
-    // ============================================================
-    switch (tool) {
-      case 'get_editor_state':
-        result = await editorControlTools.get_editor_state();
-        break;
-      case 'set_playhead':
-        result = await editorControlTools.set_playhead(params);
-        break;
-      case 'start_playback':
-        result = await editorControlTools.start_playback();
-        break;
-      case 'pause_playback':
-        result = await editorControlTools.pause_playback();
-        break;
-      case 'set_aspect_ratio':
-        result = await editorControlTools.set_aspect_ratio(params);
-        break;
-      case 'add_track':
-        result = await editorControlTools.add_track(params);
-        break;
-      case 'add_clip':
-        result = await editorControlTools.add_clip(params);
-        break;
-      case 'remove_clip':
-        result = await editorControlTools.remove_clip(params);
-        break;
-      case 'move_clip':
-        result = await editorControlTools.move_clip(params);
-        break;
-      case 'set_clip_speed':
-        result = await editorControlTools.set_clip_speed(params);
-        break;
-      case 'set_clip_volume':
-        result = await editorControlTools.set_clip_volume(params);
-        break;
-      case 'set_clip_fade':
-        result = await editorControlTools.set_clip_fade(params);
-        break;
-      case 'set_clip_transform':
-        result = await editorControlTools.set_clip_transform(params);
-        break;
-      case 'set_clip_filter':
-        result = await editorControlTools.set_clip_filter(params);
-        break;
-      case 'set_clip_color_grade':
-        result = await editorControlTools.set_clip_color_grade(params);
-        break;
-      case 'set_clip_chroma_key':
-        result = await editorControlTools.set_clip_chroma_key(params);
-        break;
-      case 'set_clip_animation':
-        result = await editorControlTools.set_clip_animation(params);
-        break;
-      case 'split_clip':
-        result = await editorControlTools.split_clip();
-        break;
-      case 'delete_selected_clip':
-        result = await editorControlTools.delete_selected_clip();
-        break;
-      case 'select_clip':
-        result = await editorControlTools.select_clip(params);
-        break;
-      case 'add_marker':
-        result = await editorControlTools.add_marker(params);
-        break;
-      case 'add_caption':
-        result = await editorControlTools.add_caption(params);
-        break;
-      case 'import_media':
-        result = await editorControlTools.import_media(params);
-        break;
-      case 'add_generated_content':
-        result = await editorControlTools.add_generated_content(params);
-        break;
-      case 'undo_action':
-        result = await editorControlTools.undo_action();
-        break;
-      case 'redo_action':
-        result = await editorControlTools.redo_action();
-        break;
-      case 'clear_timeline':
-        result = await editorControlTools.clear_timeline();
-        break;
-
-      // ============================================================
-      // Z-AI GENERATION TOOLS
-      // ============================================================
-      case 'text_to_image':
-        result = await text_to_image(params);
-        break;
-      case 'text_to_video':
-        result = await text_to_video(params);
-        break;
-      case 'image_to_video':
-        result = await image_to_video(params);
-        break;
-      case 'check_generation_status':
-        result = await check_generation_status(params);
-        break;
-      case 'text_to_speech':
-        result = await text_to_speech(params);
-        break;
-
-      // ============================================================
-      // GROK EXTENSION TOOLS
-      // ============================================================
-      case 'text_to_image_grok':
-        result = await text_to_image_grok(params);
-        break;
-      case 'text_to_video_grok':
-        result = await text_to_video_grok(params);
-        break;
-      case 'image_to_video_grok':
-        result = await image_to_video_grok(params);
-        break;
-
-      // ============================================================
-      // YOUTUBE TOOLS
-      // ============================================================
-      case 'download_youtube':
-        result = await download_youtube(params);
-        break;
-      case 'get_youtube_transcript':
-        result = await get_youtube_transcript(params);
-        break;
-
-      // ============================================================
-      // VIDEO EDITING TOOLS
-      // ============================================================
-      case 'trim_clip':
-        result = await trim_clip(params);
-        break;
-      case 'reframe':
-        result = await reframe(params);
-        break;
-      case 'add_captions':
-        result = await add_captions(params);
-        break;
-
-      // ============================================================
-      // MANIM TOOL
-      // ============================================================
-      case 'generate_animation':
-        result = await generate_animation(params);
-        break;
-
-      default:
-        return NextResponse.json({ error: `Unknown tool: ${tool}` }, { status: 400 });
-    }
-
-    return NextResponse.json(result);
-
-  } catch (error: any) {
-    console.error('[MCP] Tool execution error:', error);
-    return NextResponse.json(
-      { success: false, error: error?.message || 'Unknown error' },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * HEAD /api/mcp
- * Health check with dependency status
- */
-export async function HEAD() {
-  const deps = await checkAllDependencies();
-  const allInstalled = deps.ytDlp.installed && deps.ffmpeg.installed;
-  
+export async function OPTIONS() {
   return new NextResponse(null, {
-    status: allInstalled ? 200 : 206,
+    status: 204,
     headers: {
-      'X-Dependencies': JSON.stringify(deps)
-    }
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    },
   });
 }

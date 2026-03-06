@@ -1,10 +1,15 @@
 /**
  * Editor Control System - IDE to Editor Real-Time Interaction
+ *
+ * IMPORTANT: Uses globalThis singleton to ensure the SAME EventEmitter instance
+ * is shared across all Next.js API routes (avoids module isolation issues in dev).
  */
 
 import { EventEmitter } from 'events';
 
+// =============================================================================
 // Types
+// =============================================================================
 export interface EditorSnapshot {
   tracks: TrackData[];
   clips: ClipData[];
@@ -24,6 +29,7 @@ export interface TrackData {
   muted: boolean;
   locked: boolean;
   visible: boolean;
+  clips?: ClipData[];
 }
 
 export interface ClipData {
@@ -44,19 +50,30 @@ export interface MarkerData {
   label: string;
 }
 
-// Editor Control Manager
+// =============================================================================
+// Singleton via globalThis — survives Next.js HMR and route isolation
+// =============================================================================
 class EditorControlManager extends EventEmitter {
   private snapshot: EditorSnapshot | null = null;
   private clients = new Set<string>();
 
+  constructor() {
+    super();
+    this.setMaxListeners(100); // prevent memory leak warnings
+  }
+
   registerClient(id: string) {
     this.clients.add(id);
-    this.emit('client_connected', id);
+    console.log(`[EditorControl] Client connected: ${id} (total: ${this.clients.size})`);
   }
 
   unregisterClient(id: string) {
     this.clients.delete(id);
-    this.emit('client_disconnected', id);
+    console.log(`[EditorControl] Client disconnected: ${id} (total: ${this.clients.size})`);
+  }
+
+  getClientCount() {
+    return this.clients.size;
   }
 
   getSnapshot(): EditorSnapshot | null {
@@ -69,24 +86,46 @@ class EditorControlManager extends EventEmitter {
   }
 
   broadcast(type: string, data: unknown) {
-    this.emit('broadcast', { type, data, timestamp: Date.now() });
+    const msg = { type, data, timestamp: Date.now() };
+    console.log(`[EditorControl] Broadcasting: ${type} to ${this.clients.size} clients`);
+    this.emit('broadcast', msg);
   }
 }
 
-export const editorControl = new EditorControlManager();
+// Use globalThis to survive Next.js hot reloads and module re-imports
+declare global {
+  // eslint-disable-next-line no-var
+  var __editorControl: EditorControlManager | undefined;
+}
 
+if (!global.__editorControl) {
+  global.__editorControl = new EditorControlManager();
+}
+
+export const editorControl: EditorControlManager = global.__editorControl;
+
+// =============================================================================
 // Tool Result Type
+// =============================================================================
 interface ToolResult {
   success: boolean;
   data?: unknown;
   error?: string;
 }
 
-// Editor Control Tools
+// =============================================================================
+// Editor Control Tools — called by MCP route
+// =============================================================================
 export const editorControlTools = {
   async get_editor_state(): Promise<ToolResult> {
     const snap = editorControl.getSnapshot();
-    return snap ? { success: true, data: snap } : { success: false, error: 'No editor' };
+    if (!snap) {
+      return {
+        success: false,
+        error: 'Editor not connected. Open http://localhost:3000 in browser first.',
+      };
+    }
+    return { success: true, data: snap };
   },
 
   async set_playhead(params: { time: number }): Promise<ToolResult> {
@@ -214,7 +253,14 @@ export const editorControlTools = {
     return { success: true, data: { mediaId } };
   },
 
-  async add_generated_content(params: { type: string; name: string; src: string; duration: number; thumbnail?: string }): Promise<ToolResult> {
+  async add_generated_content(params: {
+    type: string;
+    name: string;
+    src: string;
+    duration: number;
+    thumbnail?: string;
+    startTime?: number;
+  }): Promise<ToolResult> {
     editorControl.broadcast('add_generated', params);
     return { success: true };
   },

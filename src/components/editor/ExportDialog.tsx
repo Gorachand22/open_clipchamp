@@ -20,16 +20,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 
 export default function ExportDialog() {
   const { exportSettings, setExportSettings, tracks, mediaLibrary, duration } = useEditorStore();
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  const [fileName, setFileName] = useState('open_clipchamp');
 
   const handleExport = async () => {
     setIsExporting(true);
     setExportProgress(0);
-    
+
     // Simulate export progress
     const interval = setInterval(() => {
       setExportProgress(prev => {
@@ -46,13 +48,13 @@ export default function ExportDialog() {
       clearInterval(interval);
       setExportProgress(100);
       setIsExporting(false);
-      
+
       // Create a mock download
       const blob = new Blob(['Video content placeholder'], { type: 'video/mp4' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `video-export-${Date.now()}.mp4`;
+      a.download = `${fileName || 'open_clipchamp'}.mp4`;
       a.click();
       URL.revokeObjectURL(url);
     }, 2500);
@@ -83,6 +85,16 @@ export default function ExportDialog() {
         </DialogHeader>
 
         <div className="space-y-4 py-4">
+          <div className="space-y-2">
+            <label className="text-sm text-gray-300">File Name</label>
+            <Input
+              value={fileName}
+              onChange={(e) => setFileName(e.target.value)}
+              className="bg-gray-700 border-gray-600 text-white placeholder:text-gray-400"
+              placeholder="open_clipchamp"
+            />
+          </div>
+
           <div className="space-y-2">
             <label className="text-sm text-gray-300">Quality</label>
             <Select
@@ -157,7 +169,7 @@ export default function ExportDialog() {
                 <span className="text-white">{exportProgress}%</span>
               </div>
               <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-purple-600 transition-all duration-200"
                   style={{ width: `${exportProgress}%` }}
                 />

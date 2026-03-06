@@ -70,16 +70,16 @@ export default function Timeline() {
   const handleTimelineClick = useCallback((e: React.MouseEvent) => {
     if (!timelineRef.current) return;
     if ((e.target as HTMLElement).closest('[data-clip]')) return;
-    
+
     const rect = timelineRef.current.getBoundingClientRect();
     const scrollLeft = timelineRef.current.scrollLeft;
     const x = e.clientX - rect.left + scrollLeft;
     const timelineX = x - 200; // Track header width
     if (timelineX < 0) return;
-    
-    const newTime = Math.max(0, Math.min(duration, timelineX / zoom));
+
+    const newTime = Math.max(0, Math.min(useEditorStore.getState().duration, timelineX / zoom));
     setCurrentTime(newTime);
-  }, [zoom, duration, setCurrentTime]);
+  }, [zoom, setCurrentTime]);
 
   // Playhead drag with mouse
   useEffect(() => {
@@ -91,7 +91,7 @@ export default function Timeline() {
       const scrollLeft = timelineRef.current.scrollLeft;
       const x = e.clientX - rect.left + scrollLeft;
       const timelineX = x - 200;
-      const newTime = Math.max(0, Math.min(duration, timelineX / zoom));
+      const newTime = Math.max(0, Math.min(useEditorStore.getState().duration, timelineX / zoom));
       setCurrentTime(newTime);
     };
 
@@ -104,17 +104,17 @@ export default function Timeline() {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDraggingPlayhead, zoom, duration, setCurrentTime]);
+  }, [isDraggingPlayhead, zoom, setCurrentTime]);
 
   // Auto-scroll during playback
   useEffect(() => {
     if (!timelineRef.current || !isPlaying) return;
-    
+
     const timeline = timelineRef.current;
     const playheadX = 200 + currentTime * zoom;
     const visibleStart = timeline.scrollLeft;
     const visibleEnd = visibleStart + timeline.clientWidth;
-    
+
     if (playheadX < visibleStart + 250 || playheadX > visibleEnd - 150) {
       timeline.scrollLeft = playheadX - 350;
     }
@@ -198,7 +198,7 @@ export default function Timeline() {
       </div>
 
       {/* Timeline Content */}
-      <div 
+      <div
         ref={timelineRef}
         className="flex-1 overflow-x-auto overflow-y-auto relative"
         onClick={handleTimelineClick}
@@ -210,10 +210,10 @@ export default function Timeline() {
           {/* Tracks */}
           <div className="relative">
             {tracks.map((track) => (
-              <TimelineTrack 
-                key={track.id} 
-                track={track} 
-                zoom={zoom} 
+              <TimelineTrack
+                key={track.id}
+                track={track}
+                zoom={zoom}
                 currentTime={currentTime}
                 canDelete={canDeleteTrack(track.id)}
                 onDelete={() => removeTrack(track.id)}
@@ -252,7 +252,7 @@ export default function Timeline() {
         <button onClick={() => setZoom(Math.max(10, zoom - 10))} disabled={zoom <= 10} className="p-1 text-gray-400 hover:text-white hover:bg-gray-700 rounded disabled:opacity-50" title="Zoom out">
           <ZoomOut className="w-3.5 h-3.5" />
         </button>
-        
+
         <input
           type="range"
           min={10}
@@ -261,11 +261,11 @@ export default function Timeline() {
           onChange={(e) => setZoom(Number(e.target.value))}
           className="w-20 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
         />
-        
+
         <button onClick={() => setZoom(Math.min(200, zoom + 10))} disabled={zoom >= 200} className="p-1 text-gray-400 hover:text-white hover:bg-gray-700 rounded disabled:opacity-50" title="Zoom in">
           <ZoomIn className="w-3.5 h-3.5" />
         </button>
-        
+
         <button
           onClick={() => {
             if (timelineRef.current) {
@@ -278,7 +278,7 @@ export default function Timeline() {
         >
           <Maximize className="w-3.5 h-3.5" />
         </button>
-        
+
         <span className="text-xs text-gray-500 w-12 text-right">{zoom.toFixed(0)}px/s</span>
       </div>
     </div>

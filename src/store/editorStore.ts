@@ -118,16 +118,17 @@ const defaultExportSettings: ExportSettings = {
   removeWatermark: true,
 };
 
-// Calculate total duration from all clips
+// Calculate total duration from all clips exactly
 function calculateDuration(tracks: Track[]): number {
-  let maxEnd = 30;
+  let maxEnd = 0;
   for (const track of tracks) {
     for (const clip of track.clips) {
       const clipEnd = clip.startTime + clip.duration;
       if (clipEnd > maxEnd) maxEnd = clipEnd;
     }
   }
-  return maxEnd + 10;
+  // Minimum 5 seconds if completely empty
+  return Math.max(5, maxEnd);
 }
 
 // History state type
@@ -146,7 +147,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   selectedMediaId: null,
   selectedTrackId: null,
   currentTime: 0,
-  duration: 60,
+  duration: 5,
   isPlaying: false,
   volume: 1,
   zoom: 50,
@@ -173,9 +174,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   removeMedia: (id) => {
-    set((state) => ({
-      mediaLibrary: state.mediaLibrary.filter((m) => m.id !== id),
-    }));
+    set((state) => {
+      const newTracks = state.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.filter((c) => c.mediaId !== id),
+      }));
+      return {
+        mediaLibrary: state.mediaLibrary.filter((m) => m.id !== id),
+        tracks: newTracks,
+        duration: calculateDuration(newTracks),
+        selectedMediaId: state.selectedMediaId === id ? null : state.selectedMediaId,
+        selectedClipId: state.selectedClipId && newTracks.some(t => t.clips.some(c => c.id === state.selectedClipId))
+          ? state.selectedClipId
+          : null,
+      };
+    });
   },
 
   addClipToTrack: (trackId, clipData) => {
@@ -183,8 +196,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const track = state.tracks.find((t) => t.id === trackId);
     if (!track) return;
 
-    const media = state.mediaLibrary.find((m) => m.id === clipData.mediaId);
-    if (!media) return;
+    let media = state.mediaLibrary.find((m) => m.id === clipData.mediaId);
+
+    // Auto-create placeholder media entry if not found — allows MCP add_clip to work
+    if (!media) {
+      const placeholder: MediaItem = {
+        id: clipData.mediaId,
+        name: (clipData as any).mediaName || clipData.mediaId,
+        type: (clipData as any).mediaType || 'video',
+        duration: clipData.duration || 10,
+        src: (clipData as any).src,
+        thumbnail: (clipData as any).thumbnail,
+      };
+      const newMediaLibrary = [...state.mediaLibrary, placeholder];
+      set({ mediaLibrary: newMediaLibrary });
+      media = placeholder;
+    }
 
     let optimalStartTime = clipData.startTime;
     if (track.clips.length > 0) {
@@ -256,7 +283,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       const targetTrackId = newTrackId || clipToMove.trackId;
       const targetTrackIndex = tracks.findIndex((t) => t.id === targetTrackId);
-      
+
       if (targetTrackIndex !== -1) {
         tracks[targetTrackIndex] = {
           ...tracks[targetTrackIndex],
@@ -409,11 +436,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = get();
     const track = state.tracks.find(t => t.id === trackId);
     if (!track) return;
-    
+
     const sameTypeCount = state.tracks.filter(t => t.type === track.type).length;
     if (sameTypeCount <= 1) return;
-    
-    set((state) => ({ 
+
+    set((state) => ({
       tracks: state.tracks.filter((t) => t.id !== trackId),
       selectedTrackId: state.selectedTrackId === trackId ? null : state.selectedTrackId,
     }));
@@ -435,11 +462,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = get();
     if (state.historyIndex > 0) {
       const prevState = state.history[state.historyIndex - 1];
-      set({ 
+      set({
         tracks: prevState.tracks,
         selectedClipId: prevState.selectedClipId,
         currentTime: prevState.currentTime,
-        historyIndex: state.historyIndex - 1 
+        historyIndex: state.historyIndex - 1
       });
     }
   },
@@ -448,21 +475,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const state = get();
     if (state.historyIndex < state.history.length - 1) {
       const nextState = state.history[state.historyIndex + 1];
-      set({ 
+      set({
         tracks: nextState.tracks,
         selectedClipId: nextState.selectedClipId,
         currentTime: nextState.currentTime,
-        historyIndex: state.historyIndex + 1 
+        historyIndex: state.historyIndex + 1
       });
     }
   },
 
   saveToHistory: () => {
     const state = get();
-    const currentState: HistoryState = { 
-      tracks: JSON.parse(JSON.stringify(state.tracks)), 
-      selectedClipId: state.selectedClipId, 
-      currentTime: state.currentTime 
+    const currentState: HistoryState = {
+      tracks: JSON.parse(JSON.stringify(state.tracks)),
+      selectedClipId: state.selectedClipId,
+      currentTime: state.currentTime
     };
     const newHistory = state.history.slice(0, state.historyIndex + 1);
     newHistory.push(currentState);
@@ -479,14 +506,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       for (const clip of track.clips) {
         const clipEnd = clip.startTime + clip.duration;
         if (currentTime > clip.startTime + 0.1 && currentTime < clipEnd - 0.1) {
-          const currentState: HistoryState = { 
-            tracks: JSON.parse(JSON.stringify(tracks)), 
-            selectedClipId: state.selectedClipId, 
-            currentTime: state.currentTime 
+          const currentState: HistoryState = {
+            tracks: JSON.parse(JSON.stringify(tracks)),
+            selectedClipId: state.selectedClipId,
+            currentTime: state.currentTime
           };
           const newHistory = state.history.slice(0, state.historyIndex + 1);
           newHistory.push(currentState);
-          
+
           const firstPart: TimelineClip = { ...clip, duration: currentTime - clip.startTime };
           const secondPart: TimelineClip = {
             ...clip,
@@ -514,19 +541,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   deleteSelectedClip: () => {
     const state = get();
     if (state.selectedClipId) {
-      const currentState: HistoryState = { 
-        tracks: JSON.parse(JSON.stringify(state.tracks)), 
-        selectedClipId: state.selectedClipId, 
-        currentTime: state.currentTime 
+      const currentState: HistoryState = {
+        tracks: JSON.parse(JSON.stringify(state.tracks)),
+        selectedClipId: state.selectedClipId,
+        currentTime: state.currentTime
       };
       const newHistory = state.history.slice(0, state.historyIndex + 1);
       newHistory.push(currentState);
-      
+
       const newTracks = state.tracks.map((t) => ({
         ...t,
         clips: t.clips.filter((c) => c.id !== state.selectedClipId),
       }));
-      
+
       set({
         tracks: newTracks,
         duration: calculateDuration(newTracks),

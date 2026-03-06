@@ -1,17 +1,9 @@
 'use client';
 
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import {
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  Maximize,
-  Minimize,
-  Volume2,
-  VolumeX,
-  ChevronDown,
-  Maximize2,
+  Play, Pause, SkipBack, SkipForward,
+  Maximize, Minimize, Volume2, VolumeX, ChevronDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEditorStore } from '@/store/editorStore';
@@ -19,10 +11,7 @@ import { formatTime, aspectRatioDimensions, type AspectRatio } from '@/types/edi
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import FloatingToolbar from './FloatingToolbar';
 
@@ -34,27 +23,203 @@ const aspectRatios: { value: AspectRatio; label: string }[] = [
   { value: '21:9', label: '21:9 (Ultrawide)' },
 ];
 
+// ----------------------------------------------------------------------
+// Single layer renderer for one active clip
+// ----------------------------------------------------------------------
+function ClipLayer({ clip, media, currentTime, isPlaying, isTop, trackMuted, globalVolume }: {
+  clip: any; media: any; currentTime: number; isPlaying: boolean; isTop: boolean; trackMuted: boolean; globalVolume: number;
+}) {
+  const mediaRef = useRef<HTMLMediaElement>(null);
+  const clipTime = currentTime - clip.startTime;
+
+  // Sync video time when currentTime changes
+  useEffect(() => {
+    const el = mediaRef.current;
+    if (!el || (media.type !== 'video' && media.type !== 'audio')) return;
+
+    // If playing, let the video run naturally but correct it if it drifts too far
+    // If paused, always sync the frame exactly so scrubbing works flawlessly
+    if (!isPlaying) {
+      el.currentTime = Math.max(0, clipTime);
+    } else if (Math.abs(el.currentTime - clipTime) > 0.3) {
+      el.currentTime = Math.max(0, clipTime);
+    }
+  }, [clipTime, media.type, isPlaying]);
+
+  // Sync play/pause
+  useEffect(() => {
+    const el = mediaRef.current;
+    if (!el || (media.type !== 'video' && media.type !== 'audio')) return;
+    if (isPlaying) {
+      el.play().catch(() => { });
+    } else {
+      el.pause();
+    }
+  }, [isPlaying, media.type]);
+
+  // Sync Volume and Speed with Fade Interpolation
+  useEffect(() => {
+    const el = mediaRef.current;
+    if (!el || (media.type !== 'video' && media.type !== 'audio')) return;
+
+    // Calculate fade for volume
+    let currentVolume = clip.volume ?? 1;
+    const fadeIn = clip.fadeIn || 0;
+    const fadeOut = clip.fadeOut || 0;
+    if (fadeIn > 0 && clipTime < fadeIn) {
+      currentVolume *= Math.max(0, clipTime / fadeIn);
+    } else if (fadeOut > 0 && clip.duration - clipTime < fadeOut) {
+      currentVolume *= Math.max(0, (clip.duration - clipTime) / fadeOut);
+    }
+
+    el.muted = trackMuted;
+    el.volume = Math.max(0, Math.min(1, globalVolume * currentVolume));
+    el.playbackRate = clip.speed ?? 1;
+  }, [trackMuted, globalVolume, clip.volume, clip.speed, clip.fadeIn, clip.fadeOut, clip.duration, clipTime, media.type]);
+
+  let opacity = clip.transform?.opacity ?? 1;
+  const fadeIn = clip.fadeIn || 0;
+  const fadeOut = clip.fadeOut || 0;
+  if (fadeIn > 0 && clipTime < fadeIn) {
+    opacity *= Math.max(0, clipTime / fadeIn);
+  } else if (fadeOut > 0 && clip.duration - clipTime < fadeOut) {
+    opacity *= Math.max(0, (clip.duration - clipTime) / fadeOut);
+  }
+  const fit = clip.transform?.fit ?? true;
+  const rotation = clip.transform?.rotation ?? 0;
+  const scale = clip.transform?.scale ?? 1;
+  const flipH = clip.transform?.flipH ? -1 : 1;
+  const flipV = clip.transform?.flipV ? -1 : 1;
+  const posX = clip.transform?.positionX ?? 0;
+  const posY = clip.transform?.positionY ?? 0;
+
+  let cssFilter = '';
+
+  // Apply Color Grading
+  if (clip.colorGrade) {
+    const brightness = 1 + (clip.colorGrade.exposure || 0) / 100;
+    const contrast = 1 + (clip.colorGrade.contrast || 0) / 100;
+    const saturate = 1 + (clip.colorGrade.saturation || 0) / 100;
+    const sepia = clip.colorGrade.temperature && clip.colorGrade.temperature > 0 ? clip.colorGrade.temperature / 100 : 0;
+    const hueRotate = clip.colorGrade.temperature && clip.colorGrade.temperature < 0 ? clip.colorGrade.temperature / 2 : 0;
+
+    if (brightness !== 1) cssFilter += `brightness(${brightness}) `;
+    if (contrast !== 1) cssFilter += `contrast(${contrast}) `;
+    if (saturate !== 1) cssFilter += `saturate(${saturate}) `;
+    if (sepia > 0) cssFilter += `sepia(${sepia}) `;
+    if (hueRotate !== 0) cssFilter += `hue-rotate(${hueRotate}deg) `;
+  }
+
+  // Apply Filter Presets
+  if (clip.filter) {
+    switch (clip.filter) {
+      case 'cinematic': cssFilter += 'contrast(1.2) saturate(1.1) brightness(0.9) '; break;
+      case 'warm': cssFilter += 'sepia(0.3) saturate(1.2) '; break;
+      case 'cool': cssFilter += 'hue-rotate(15deg) saturate(0.9) '; break;
+      case 'vintage': cssFilter += 'sepia(0.4) contrast(1.1) brightness(0.9) '; break;
+      case 'noir': cssFilter += 'grayscale(1) contrast(1.2) brightness(0.9) '; break;
+      case 'vibrant': cssFilter += 'saturate(1.5) contrast(1.1) '; break;
+      case 'muted': cssFilter += 'saturate(0.5) contrast(0.9) '; break;
+      case 'teal': cssFilter += 'hue-rotate(-15deg) saturate(1.2) contrast(1.1) '; break;
+      case 'dramatic': cssFilter += 'contrast(1.4) brightness(0.8) saturate(0.8) '; break;
+      case 'retro': cssFilter += 'sepia(0.2) saturate(1.4) hue-rotate(-10deg) '; break;
+      case 'neon': cssFilter += 'saturate(2) contrast(1.2) brightness(1.1) hue-rotate(10deg) '; break;
+    }
+  }
+
+  const style: React.CSSProperties = {
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    objectFit: fit ? 'contain' : 'cover',
+    opacity,
+    transform: `translate(${posX}px, ${posY}px) rotate(${rotation}deg) scale(${scale * flipH}, ${scale * flipV})`,
+    filter: cssFilter.trim() || undefined,
+  };
+
+  if (media.type === 'video') {
+    if (!media.src) {
+      return (
+        <img
+          src={media.thumbnail}
+          alt={media.name}
+          style={style}
+          className="absolute inset-0 w-full h-full object-contain"
+        />
+      );
+    }
+    return (
+      <video
+        ref={mediaRef as React.RefObject<HTMLVideoElement>}
+        src={media.src}
+        style={style}
+        playsInline
+        preload="auto"
+        onLoadedMetadata={(e) => {
+          (e.target as HTMLVideoElement).currentTime = Math.max(0, clipTime);
+        }}
+        className="absolute inset-0 w-full h-full object-contain"
+      />
+    );
+  }
+
+  if (media.type === 'image') {
+    return (
+      <img
+        src={media.src || media.thumbnail}
+        alt={media.name}
+        style={style}
+        className="absolute inset-0 w-full h-full object-contain"
+      />
+    );
+  }
+
+  // Audio - show hidden audio tag
+  if (media.type === 'audio') {
+    return (
+      <audio
+        ref={mediaRef as React.RefObject<HTMLAudioElement>}
+        src={media.src}
+        preload="auto"
+        onLoadedMetadata={(e) => {
+          (e.target as HTMLAudioElement).currentTime = Math.max(0, clipTime);
+        }}
+        className="hidden"
+      />
+    );
+  }
+
+  return null;
+}
+
+// ----------------------------------------------------------------------
+// Empty state message
+// ----------------------------------------------------------------------
+function EmptyState() {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-6">
+      <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center mb-2">
+        <Play className="w-8 h-8 text-gray-600 ml-1" />
+      </div>
+      <p className="text-gray-400 text-sm">Add media to the timeline to preview</p>
+      <p className="text-gray-600 text-xs">Drag media from the left panel to the timeline below</p>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Main PreviewCanvas
+// ----------------------------------------------------------------------
 export default function PreviewCanvas() {
   const {
-    currentTime,
-    duration,
-    isPlaying,
-    volume,
-    tracks,
-    mediaLibrary,
-    aspectRatio,
-    isFullscreen,
-    selectedClipId,
-    getClipById,
-    setCurrentTime,
-    togglePlay,
-    setVolume,
-    setAspectRatio,
-    setFullscreen,
+    currentTime, duration, isPlaying, volume, tracks, mediaLibrary,
+    aspectRatio, isFullscreen, selectedClipId, getClipById,
+    setCurrentTime, togglePlay, setVolume, setAspectRatio, setFullscreen,
   } = useEditorStore();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number>();
   const lastTimeRef = useRef<number>(0);
   const [isMuted, setIsMuted] = useState(false);
@@ -66,304 +231,67 @@ export default function PreviewCanvas() {
   useEffect(() => {
     const updateCanvasSize = () => {
       if (!containerRef.current) return;
-      
       const container = containerRef.current;
-      const containerWidth = container.clientWidth - 32;
-      const containerHeight = container.clientHeight - 100;
-      
+      const cw = container.clientWidth - 32;
+      const ch = container.clientHeight - 80;
       const dims = aspectRatioDimensions[aspectRatio];
-      const aspectRatioValue = dims.width / dims.height;
-      
-      let width = containerWidth;
-      let height = width / aspectRatioValue;
-      
-      if (height > containerHeight) {
-        height = containerHeight;
-        width = height * aspectRatioValue;
-      }
-      
-      setCanvasSize({ width: Math.floor(width), height: Math.floor(height) });
+      const ar = dims.width / dims.height;
+      let w = cw;
+      let h = w / ar;
+      if (h > ch) { h = ch; w = h * ar; }
+      setCanvasSize({ width: Math.floor(w), height: Math.floor(h) });
     };
-    
     updateCanvasSize();
-    window.addEventListener('resize', updateCanvasSize);
-    return () => window.removeEventListener('resize', updateCanvasSize);
+    const ro = new ResizeObserver(updateCanvasSize);
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => ro.disconnect();
   }, [aspectRatio]);
 
-  // Playback loop
+  // Playback animation loop
   useEffect(() => {
     if (isPlaying) {
       lastTimeRef.current = performance.now();
-      
-      const animate = (timestamp: number) => {
-        const delta = (timestamp - lastTimeRef.current) / 1000;
-        lastTimeRef.current = timestamp;
-        
+      const animate = (ts: number) => {
+        const delta = (ts - lastTimeRef.current) / 1000;
+        lastTimeRef.current = ts;
         const state = useEditorStore.getState();
-        const newTime = state.currentTime + delta;
-        
-        if (newTime >= state.duration) {
+        const nt = state.currentTime + delta;
+        if (nt >= state.duration) {
           useEditorStore.getState().setCurrentTime(0);
+          useEditorStore.getState().pause();
         } else {
-          useEditorStore.getState().setCurrentTime(newTime);
+          useEditorStore.getState().setCurrentTime(nt);
         }
-        
         animationRef.current = requestAnimationFrame(animate);
       };
-      
       animationRef.current = requestAnimationFrame(animate);
     }
-    
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
+    return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current); };
   }, [isPlaying]);
 
-  // Draw on canvas
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  // Get active clips sorted by layer (overlay on top)
+  const activeClips = tracks.flatMap(track =>
+    track.clips
+      .filter(clip => currentTime >= clip.startTime && currentTime < clip.startTime + clip.duration)
+      .map(clip => ({ clip, track }))
+  ).sort((a, b) => {
+    const order: Record<string, number> = { video: 0, audio: 1, overlay: 2 };
+    return (order[a.track.type] ?? 0) - (order[b.track.type] ?? 0);
+  });
 
-    const dims = aspectRatioDimensions[aspectRatio];
-    
-    // Set canvas resolution (higher for quality)
-    const scale = 2;
-    canvas.width = dims.width / 4;
-    canvas.height = dims.height / 4;
-
-    // Clear canvas
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Find active clips at current time
-    const activeClips = tracks.flatMap(track =>
-      track.clips.filter(clip =>
-        currentTime >= clip.startTime && currentTime < clip.startTime + clip.duration
-      ).map(clip => ({ clip, track }))
-    );
-
-    // Sort by track type (overlay on top)
-    const trackOrder = { overlay: 0, video: 1, audio: 2 };
-    const sortedClips = activeClips.sort((a, b) => {
-      return (trackOrder[a.track.type] ?? 2) - (trackOrder[b.track.type] ?? 2);
-    });
-
-    // Draw clips
-    sortedClips.forEach(({ clip, track }) => {
-      const media = mediaLibrary.find(m => m.id === clip.mediaId);
-      if (!media) return;
-
-      const transform = clip.transform;
-      const clipProgress = (currentTime - clip.startTime) / clip.duration;
-
-      // Calculate fade opacity
-      let opacity = transform?.opacity ?? 1;
-      if (clip.fadeIn > 0 && clipProgress < clip.fadeIn / clip.duration) {
-        opacity *= clipProgress / (clip.fadeIn / clip.duration);
-      }
-      if (clip.fadeOut > 0 && clipProgress > 1 - clip.fadeOut / clip.duration) {
-        opacity *= (1 - clipProgress) / (clip.fadeOut / clip.duration);
-      }
-
-      ctx.save();
-      ctx.globalAlpha = opacity;
-
-      // Apply transforms
-      const centerX = canvas.width / 2;
-      const centerY = canvas.height / 2;
-
-      ctx.translate(centerX, centerY);
-      ctx.rotate((transform?.rotation ?? 0) * Math.PI / 180);
-      if (transform?.flipH) ctx.scale(-1, 1);
-      if (transform?.flipV) ctx.scale(1, -1);
-      ctx.translate(-centerX, -centerY);
-
-      // Draw based on media type
-      if (media.type === 'video') {
-        // Video gradient background
-        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-        gradient.addColorStop(0, '#7c3aed');
-        gradient.addColorStop(0.5, '#8b5cf6');
-        gradient.addColorStop(1, '#4c1d95');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Play icon
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-        ctx.beginPath();
-        ctx.moveTo(canvas.width / 2 - 40, canvas.height / 2 - 40);
-        ctx.lineTo(canvas.width / 2 - 40, canvas.height / 2 + 40);
-        ctx.lineTo(canvas.width / 2 + 40, canvas.height / 2);
-        ctx.closePath();
-        ctx.fill();
-
-        // Media name
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 28px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(media.name, canvas.width / 2, canvas.height / 2 + 80);
-
-        // Time indicator
-        const clipTime = currentTime - clip.startTime;
-        ctx.font = '20px monospace';
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-        ctx.fillText(`${clipTime.toFixed(1)}s / ${clip.duration.toFixed(1)}s`, canvas.width / 2, canvas.height / 2 - 80);
-        
-        // Progress bar
-        const progress = clipTime / clip.duration;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.fillRect(50, canvas.height - 40, canvas.width - 100, 4);
-        ctx.fillStyle = '#a855f7';
-        ctx.fillRect(50, canvas.height - 40, (canvas.width - 100) * progress, 4);
-
-      } else if (media.type === 'image') {
-        // Image gradient
-        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-        gradient.addColorStop(0, '#2563eb');
-        gradient.addColorStop(0.5, '#3b82f6');
-        gradient.addColorStop(1, '#1d4ed8');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Image icon
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(canvas.width / 2 - 60, canvas.height / 2 - 45, 120, 90);
-
-        // Mountain
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.beginPath();
-        ctx.moveTo(canvas.width / 2 - 45, canvas.height / 2 + 30);
-        ctx.lineTo(canvas.width / 2 - 15, canvas.height / 2 - 15);
-        ctx.lineTo(canvas.width / 2 + 25, canvas.height / 2 + 15);
-        ctx.lineTo(canvas.width / 2 + 45, canvas.height / 2);
-        ctx.lineTo(canvas.width / 2 + 45, canvas.height / 2 + 35);
-        ctx.lineTo(canvas.width / 2 - 45, canvas.height / 2 + 35);
-        ctx.fill();
-
-        // Sun
-        ctx.beginPath();
-        ctx.arc(canvas.width / 2 + 30, canvas.height / 2 - 20, 15, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255, 200, 100, 0.5)';
-        ctx.fill();
-
-        // Name
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 28px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(media.name, canvas.width / 2, canvas.height / 2 + 80);
-
-      } else if (media.type === 'audio') {
-        // Audio visualization
-        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-        gradient.addColorStop(0, '#059669');
-        gradient.addColorStop(0.5, '#10b981');
-        gradient.addColorStop(1, '#047857');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Waveform
-        const barCount = 50;
-        const barWidth = (canvas.width - 80) / barCount;
-        const clipTime = currentTime - clip.startTime;
-        
-        for (let i = 0; i < barCount; i++) {
-          const progress = i / barCount;
-          const timeOffset = clipTime * 3 + progress * Math.PI * 6;
-          const height = (Math.sin(timeOffset) * 0.5 + 0.5) * 120 + 20;
-          
-          ctx.fillStyle = `rgba(255, 255, 255, ${0.4 + Math.sin(timeOffset) * 0.2})`;
-          ctx.fillRect(
-            40 + i * barWidth,
-            canvas.height / 2 - height / 2,
-            barWidth - 2,
-            height
-          );
-        }
-
-        // Music icon
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.font = 'bold 60px system-ui';
-        ctx.textAlign = 'center';
-        ctx.fillText('♪', canvas.width / 2, canvas.height / 2 - 60);
-
-        // Name
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 24px system-ui, sans-serif';
-        ctx.fillText(media.name, canvas.width / 2, canvas.height / 2 + 100);
-      }
-
-      ctx.restore();
-    });
-
-    // No clips message
-    if (activeClips.length === 0) {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-      ctx.font = '18px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('Add media to the timeline to preview', canvas.width / 2, canvas.height / 2);
-      
-      ctx.font = '14px system-ui, sans-serif';
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-      ctx.fillText('Drag media from the left panel to the timeline below', canvas.width / 2, canvas.height / 2 + 30);
-    }
-
-    // Timecode overlay
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    const timecodeWidth = 120;
-    ctx.fillRect(canvas.width - timecodeWidth - 10, 10, timecodeWidth, 24);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '14px monospace';
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(formatTime(currentTime), canvas.width - 20, 22);
-
-    // Selection indicator
-    if (selectedClip && activeClips.some(ac => ac.clip.id === selectedClip.id)) {
-      ctx.strokeStyle = '#22c55e';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
-    }
-
-  }, [currentTime, tracks, mediaLibrary, aspectRatio, selectedClip]);
-
-  const skipFrames = (frames: number) => {
-    setCurrentTime(Math.max(0, Math.min(duration, currentTime + frames / 30)));
-  };
-
+  const skipFrames = (frames: number) => setCurrentTime(Math.max(0, Math.min(duration, currentTime + frames / 30)));
   const handleSeek = (value: number[]) => setCurrentTime(value[0]);
 
   const toggleFullscreen = async () => {
     if (!containerRef.current) return;
     try {
-      if (!isFullscreen) {
-        await containerRef.current.requestFullscreen();
-        setFullscreen(true);
-      } else {
-        await document.exitFullscreen();
-        setFullscreen(false);
-      }
-    } catch (err) {
-      console.error('Fullscreen error:', err);
-    }
+      if (!isFullscreen) { await containerRef.current.requestFullscreen(); setFullscreen(true); }
+      else { await document.exitFullscreen(); setFullscreen(false); }
+    } catch { }
   };
 
-  const toggleMute = () => {
-    setIsMuted(!isMuted);
-    setVolume(isMuted ? 1 : 0);
-  };
-
-  const getCanvasAspectRatio = () => {
-    const dims = aspectRatioDimensions[aspectRatio];
-    return dims.width / dims.height;
-  };
+  const toggleMute = () => { setIsMuted(!isMuted); setVolume(isMuted ? 1 : 0); };
 
   return (
     <div ref={containerRef} className="h-full flex flex-col bg-gray-950">
@@ -388,31 +316,68 @@ export default function PreviewCanvas() {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        <div className="flex-1 flex justify-center px-4">
+          <FloatingToolbar />
+        </div>
 
-        <div className="text-sm text-gray-400 font-mono">
+        <div className="text-sm text-gray-400 font-mono whitespace-nowrap">
           {formatTime(currentTime)} / {formatTime(duration)}
         </div>
       </div>
 
-      {/* Canvas Preview */}
-      <div ref={containerRef} className="flex-1 flex flex-col items-center justify-center p-4 relative gap-3 min-h-0 overflow-hidden">
-        {/* Floating Toolbar */}
-        <div className="absolute top-2 z-10">
-          <FloatingToolbar />
-        </div>
+      {/* Preview area */}
+      <div ref={containerRef as any} className="flex-1 flex items-center justify-center p-4 relative min-h-0 overflow-hidden bg-gray-950">
 
-        <canvas
-          ref={canvasRef}
-          className="max-w-full max-h-full rounded-lg shadow-2xl bg-black object-contain"
-          style={{ 
+        {/* Preview frame with checkerboard background */}
+        <div
+          ref={previewRef}
+          style={{
             width: canvasSize.width,
             height: canvasSize.height,
+            position: 'relative',
+            borderRadius: 8,
+            overflow: 'hidden',
+            backgroundColor: '#000',
+            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.9)',
+            backgroundImage: `repeating-conic-gradient(#111 0% 25%, #0a0a0a 0% 50%)`,
+            backgroundSize: '20px 20px',
           }}
-        />
+        >
+          {/* Render each active clip as a layer */}
+          {activeClips.map(({ clip, track }, i) => {
+            const media = mediaLibrary.find(m => m.id === clip.mediaId);
+            if (!media) return null;
+            return (
+              <ClipLayer
+                key={clip.id}
+                clip={clip}
+                media={media}
+                currentTime={currentTime}
+                isPlaying={isPlaying}
+                isTop={i === activeClips.length - 1}
+                trackMuted={track.muted}
+                globalVolume={isMuted ? 0 : volume}
+              />
+            );
+          })}
+
+          {/* Empty state */}
+          {activeClips.length === 0 && <EmptyState />}
+
+          {/* Selection border */}
+          {selectedClip && activeClips.some(ac => ac.clip.id === selectedClip.id) && (
+            <div className="absolute inset-0 border-2 border-green-500 pointer-events-none rounded-lg" />
+          )}
+
+          {/* Timecode */}
+          <div className="absolute bottom-2 right-2 px-2 py-0.5 bg-black/70 rounded text-xs font-mono text-white">
+            {formatTime(currentTime)}
+          </div>
+        </div>
 
         {/* Selected clip info */}
         {selectedClip && (
-          <div className="absolute bottom-16 left-4 px-3 py-2 bg-gray-800/90 backdrop-blur-sm rounded-lg border border-gray-700">
+          <div className="absolute bottom-4 left-4 px-3 py-2 bg-gray-800/90 backdrop-blur-sm rounded-lg border border-gray-700">
             <p className="text-sm text-white font-medium">
               {mediaLibrary.find(m => m.id === selectedClip.mediaId)?.name}
             </p>
@@ -423,45 +388,31 @@ export default function PreviewCanvas() {
         )}
       </div>
 
-      {/* Playback Controls */}
-      <div className="bg-gray-900 border-t border-gray-800 p-3 flex-shrink-0">
-        {/* Seek Bar */}
-        <div className="mb-3">
-          <Slider
-            value={[currentTime]}
-            max={duration}
-            step={0.01}
-            onValueChange={handleSeek}
-            className="cursor-pointer"
-          />
+      {/* Controls */}
+      <div className="bg-gray-900 border-t border-gray-800 px-3 py-1.5 flex items-center gap-4 flex-shrink-0 h-10">
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={() => skipFrames(-1)} className="text-white hover:bg-gray-700 w-6 h-6" title="Previous frame">
+            <SkipBack className="w-3 h-3" />
+          </Button>
+          <Button size="icon" onClick={togglePlay} className="w-7 h-7 rounded-sm bg-purple-600 hover:bg-purple-700 text-white">
+            {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+          </Button>
+          <Button variant="ghost" size="icon" onClick={() => skipFrames(1)} className="text-white hover:bg-gray-700 w-6 h-6" title="Next frame">
+            <SkipForward className="w-3 h-3" />
+          </Button>
         </div>
 
-        <div className="flex items-center justify-between">
-          {/* Left controls */}
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" onClick={() => skipFrames(-1)} className="text-white hover:bg-gray-700 w-8 h-8" title="Previous frame">
-              <SkipBack className="w-4 h-4" />
-            </Button>
-          </div>
+        <div className="flex-1 flex items-center h-full">
+          <Slider value={[currentTime]} max={duration} step={0.01} onValueChange={handleSeek} className="cursor-pointer" />
+        </div>
 
-          {/* Center - Play/Pause */}
-          <Button size="icon" onClick={togglePlay} className="w-12 h-12 rounded-full bg-purple-600 hover:bg-purple-700 text-white">
-            {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={toggleMute} className="text-white hover:bg-gray-700 w-6 h-6">
+            {isMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
           </Button>
-
-          {/* Right controls */}
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" onClick={() => skipFrames(1)} className="text-white hover:bg-gray-700 w-8 h-8" title="Next frame">
-              <SkipForward className="w-4 h-4" />
-            </Button>
-            <div className="w-px h-4 bg-gray-700 mx-1" />
-            <Button variant="ghost" size="icon" onClick={toggleMute} className="text-white hover:bg-gray-700 w-8 h-8" title={isMuted ? 'Unmute' : 'Mute'}>
-              {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            </Button>
-            <Button variant="ghost" size="icon" onClick={toggleFullscreen} className="text-white hover:bg-gray-700 w-8 h-8" title="Fullscreen">
-              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-            </Button>
-          </div>
+          <Button variant="ghost" size="icon" onClick={toggleFullscreen} className="text-white hover:bg-gray-700 w-6 h-6">
+            {isFullscreen ? <Minimize className="w-3 h-3" /> : <Maximize className="w-3 h-3" />}
+          </Button>
         </div>
       </div>
     </div>
