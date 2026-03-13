@@ -23,10 +23,9 @@ import {
 import { Input } from '@/components/ui/input';
 
 export default function ExportDialog() {
-  const { exportSettings, setExportSettings, tracks, mediaLibrary, duration } = useEditorStore();
+  const { exportSettings, setExportSettings, tracks, mediaLibrary, duration, projectName } = useEditorStore();
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
-  const [fileName, setFileName] = useState('open_clipchamp');
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -54,7 +53,7 @@ export default function ExportDialog() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${fileName || 'open_clipchamp'}.mp4`;
+      a.download = `${projectName || 'open_clipchamp'}.mp4`;
       a.click();
       URL.revokeObjectURL(url);
     }, 2500);
@@ -85,15 +84,7 @@ export default function ExportDialog() {
         </DialogHeader>
 
         <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <label className="text-sm text-gray-300">File Name</label>
-            <Input
-              value={fileName}
-              onChange={(e) => setFileName(e.target.value)}
-              className="bg-gray-700 border-gray-600 text-white placeholder:text-gray-400"
-              placeholder="open_clipchamp"
-            />
-          </div>
+
 
           <div className="space-y-2">
             <label className="text-sm text-gray-300">Quality</label>

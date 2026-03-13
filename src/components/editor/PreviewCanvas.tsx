@@ -3,7 +3,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import {
   Play, Pause, SkipBack, SkipForward,
-  Maximize, Minimize, Volume2, VolumeX, ChevronDown,
+  Maximize, Minimize, Volume2, VolumeX, ChevronDown, RotateCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEditorStore } from '@/store/editorStore';
@@ -30,7 +30,71 @@ function ClipLayer({ clip, media, currentTime, isPlaying, isTop, trackMuted, glo
   clip: any; media: any; currentTime: number; isPlaying: boolean; isTop: boolean; trackMuted: boolean; globalVolume: number;
 }) {
   const mediaRef = useRef<HTMLMediaElement>(null);
+  const textRef = useRef<HTMLDivElement>(null);
+  const [isEditing, setIsEditing] = useState(false);
+
   const clipTime = currentTime - clip.startTime;
+  const isSelected = useEditorStore(state => state.selectedClipId) === clip.id;
+
+  // Exit edit mode if deselected
+  useEffect(() => {
+    if (!isSelected) setIsEditing(false);
+  }, [isSelected]);
+
+  // Sync text content to DOM when not actively focused (avoids caret jumping)
+  useEffect(() => {
+    if (media.id.startsWith('text-') || media.type === 'caption') {
+      let currentText = clip.text?.text || media.name || 'Text';
+      if (media.type === 'caption' && media.captions) {
+        const currentCaptionLine = media.captions.find((c: any) => clipTime >= c.startTime && clipTime <= c.endTime);
+        if (currentCaptionLine) {
+          currentText = currentCaptionLine.text;
+        } else {
+          currentText = isSelected ? '(No Subtitle Active Here)' : '';
+        }
+      }
+
+      if (textRef.current && !isEditing) {
+        if (textRef.current.innerHTML !== currentText) {
+          textRef.current.innerHTML = currentText;
+        }
+      }
+    }
+  }, [clip.text?.text, media.id, isEditing, media.type, media.captions, clipTime, isSelected]);
+
+  // F2 local listener
+  useEffect(() => {
+    if (!isSelected || !media.id.startsWith('text-')) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable) ||
+        (e.target instanceof Element && e.target.closest('[contenteditable="true"]')) ||
+        document.activeElement?.tagName === 'INPUT' ||
+        document.activeElement?.tagName === 'TEXTAREA' ||
+        (document.activeElement as HTMLElement)?.isContentEditable
+      ) return;
+
+      if (e.key === 'F2') {
+        e.preventDefault();
+        setIsEditing(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isSelected, media.id]);
+
+  // Focus and select all when entering edit mode
+  useEffect(() => {
+    if (isEditing && textRef.current) {
+      textRef.current.focus();
+      // Only select all if it's the first time they enter edit mode and didn't manually place cursor
+      if (document.activeElement === textRef.current) {
+        window.getSelection()?.selectAllChildren(textRef.current);
+      }
+    }
+  }, [isEditing]);
 
   // Sync video time when currentTime changes
   useEffect(() => {
@@ -80,10 +144,22 @@ function ClipLayer({ clip, media, currentTime, isPlaying, isTop, trackMuted, glo
   let opacity = clip.transform?.opacity ?? 1;
   const fadeIn = clip.fadeIn || 0;
   const fadeOut = clip.fadeOut || 0;
+  
   if (fadeIn > 0 && clipTime < fadeIn) {
     opacity *= Math.max(0, clipTime / fadeIn);
-  } else if (fadeOut > 0 && clip.duration - clipTime < fadeOut) {
+  } else if (fadeOut > 0 && clipTime >= clip.duration - fadeOut && clipTime < clip.duration) {
     opacity *= Math.max(0, (clip.duration - clipTime) / fadeOut);
+  }
+
+  // Artificial fade out if lingering for a transition overlap
+  if (clipTime >= clip.duration) {
+    const overTime = clipTime - clip.duration;
+    // We pass transitionLinger via clip object dynamically augmented below
+    if (clip._lingerDuration) {
+      opacity *= Math.max(0, 1 - (overTime / clip._lingerDuration));
+    } else {
+      opacity = 0;
+    }
   }
   const fit = clip.transform?.fit ?? true;
   const rotation = clip.transform?.rotation ?? 0;
@@ -138,40 +214,312 @@ function ClipLayer({ clip, media, currentTime, isPlaying, isTop, trackMuted, glo
     filter: cssFilter.trim() || undefined,
   };
 
+  if (media.id.startsWith('text-') || media.type === 'caption') {
+    let textContent = clip.text?.text || 'Text';
+
+    // Override static text content if it's an SRT parsed caption file
+    if (media.type === 'caption' && media.captions) {
+      const currentCaptionLine = media.captions.find((c: any) => clipTime >= c.startTime && clipTime <= c.endTime);
+      if (currentCaptionLine) {
+        textContent = currentCaptionLine.text;
+      } else {
+        // If empty space between SRT subtitles, hide it entirely unless selected
+        if (!isSelected) return null;
+        textContent = '(No Subtitle Active Here)';
+      }
+    }
+    const fontSize = clip.text?.fontSize || 60;
+    const fontFamily = clip.text?.fontFamily || 'Inter, sans-serif';
+    const color = clip.text?.color || '#FFFFFF';
+    const bgColor = clip.text?.backgroundColor || 'transparent';
+    const fontWeight = clip.text?.fontWeight || 'bold';
+
+    const updateTransform = useEditorStore.getState().updateClipTransform;
+
+    const handlePointerDown = (e: React.PointerEvent, action: string, origin?: string) => {
+      if (!isSelected) return;
+      e.stopPropagation();
+      if (action !== 'move') {
+        e.preventDefault();
+      }
+
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startPosX = clip.transform?.positionX ?? 0;
+      const startPosY = clip.transform?.positionY ?? 0;
+      const startScale = clip.transform?.scale ?? 1;
+      const startRot = clip.transform?.rotation ?? 0;
+
+      const containerBounds = e.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
+      const rect = e.currentTarget.parentElement?.getBoundingClientRect();
+
+      const centerX = rect ? rect.left + rect.width / 2 : 0;
+      const centerY = rect ? rect.height / 2 + rect.top : 0;
+
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        if (action === 'move') {
+          const dx = moveEvent.clientX - startX;
+          const dy = moveEvent.clientY - startY;
+          updateTransform(clip.id, {
+            positionX: startPosX + dx,
+            positionY: startPosY + dy,
+          });
+        } else if (action === 'scale') {
+          const dx = moveEvent.clientX - startX;
+          const dy = moveEvent.clientY - startY;
+          // Basic scaling based on y-movement logic
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          let scaleChange = dist / 200; // arbitrary scale factor
+          if (origin === 'nw' || origin === 'w') {
+            scaleChange = dx < 0 ? scaleChange : -scaleChange;
+          } else if (origin === 'ne' || origin === 'e') {
+            scaleChange = dx > 0 ? scaleChange : -scaleChange;
+          } else if (origin === 'sw' || origin === 's') {
+            scaleChange = dy > 0 ? scaleChange : -scaleChange;
+          } else if (origin === 'se') {
+            scaleChange = dx > 0 ? scaleChange : -scaleChange;
+          } else if (origin === 'n') {
+            scaleChange = dy < 0 ? scaleChange : -scaleChange;
+          }
+          let newScale = startScale + scaleChange;
+          // If dx/dy signs oppose origin for corner drags, adjust
+          if (origin === 'se') {
+            const mX = moveEvent.clientX - centerX;
+            const mY = moveEvent.clientY - centerY;
+            const startDist = Math.sqrt((startX - centerX) ** 2 + (startY - centerY) ** 2);
+            const currentDist = Math.sqrt(mX ** 2 + mY ** 2);
+            newScale = startScale * (currentDist / startDist);
+          } else if (origin === 'ne' || origin === 'sw' || origin === 'nw') {
+            const mX = moveEvent.clientX - centerX;
+            const mY = moveEvent.clientY - centerY;
+            const startDist = Math.sqrt((startX - centerX) ** 2 + (startY - centerY) ** 2);
+            const currentDist = Math.sqrt(mX ** 2 + mY ** 2);
+            newScale = startScale * (currentDist / startDist);
+          }
+
+          if (newScale < 0.1) newScale = 0.1;
+          updateTransform(clip.id, { scale: newScale });
+        } else if (action === 'rotate') {
+          const startAngle = Math.atan2(startY - centerY, startX - centerX);
+          const currentAngle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX);
+          let angleDiff = (currentAngle - startAngle) * (180 / Math.PI);
+          let newRotation = startRot + angleDiff;
+          // constrain to somewhat standard degrees when near them if snapping enabled later
+          updateTransform(clip.id, { rotation: newRotation });
+        }
+      };
+
+      const handlePointerUp = () => {
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+      };
+
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+    };
+
+    return (
+      <div
+        style={{
+          ...style,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+          animationPlayState: isPlaying ? 'running' : 'paused',
+          animationDelay: clip.transition ? `${-clipTime}s` : undefined,
+          '--anim-duration': clip.transition ? `${clip.transition.duration}s` : undefined,
+        } as React.CSSProperties}
+        className={cn(
+          "absolute inset-0",
+          clip.transition && clipTime < clip.transition.duration ? `trans-${clip.transition.type}` : ''
+        )}
+      >
+        <div
+          className={cn(
+            "relative flex items-center justify-center transition-all",
+            isSelected ? "ring-2 ring-purple-500" : ""
+          )}
+          style={{
+            pointerEvents: isEditing ? 'none' : 'auto',
+            cursor: isSelected && !isEditing ? 'move' : 'default',
+            // We pass variables down to CSS for duration if we prefer, but for now fixed duration using classes is easiest.
+          }}
+          onPointerDown={(e) => {
+            if (isEditing) return; // let child handle it
+
+            if (isSelected) {
+              handlePointerDown(e, 'move');
+            }
+          }}
+          onDoubleClick={(e) => {
+            if (isSelected && !isEditing) {
+              e.stopPropagation();
+              setIsEditing(true);
+            }
+          }}
+        >
+          {isSelected && (
+            <>
+              {/* Attached Toolbar */}
+              <div className="absolute -top-14 left-1/2 -translate-x-1/2 z-50 min-w-max">
+                <FloatingToolbar />
+              </div>
+
+              {/* Bounding Box Handles */}
+              {/* Corners */}
+              <div onPointerDown={(e) => handlePointerDown(e, 'scale', 'nw')} className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white rounded-full border border-gray-300 shadow cursor-nwse-resize" />
+              <div onPointerDown={(e) => handlePointerDown(e, 'scale', 'ne')} className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white rounded-full border border-gray-300 shadow cursor-nesw-resize" />
+              <div onPointerDown={(e) => handlePointerDown(e, 'scale', 'sw')} className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white rounded-full border border-gray-300 shadow cursor-nesw-resize" />
+              <div onPointerDown={(e) => handlePointerDown(e, 'scale', 'se')} className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white rounded-full border border-gray-300 shadow cursor-nwse-resize" />
+
+              {/* Edges */}
+              <div onPointerDown={(e) => handlePointerDown(e, 'scale', 'n')} className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-1.5 bg-white rounded-sm border border-gray-300 shadow cursor-ns-resize" />
+              <div onPointerDown={(e) => handlePointerDown(e, 'scale', 's')} className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-1.5 bg-white rounded-sm border border-gray-300 shadow cursor-ns-resize" />
+              <div onPointerDown={(e) => handlePointerDown(e, 'scale', 'w')} className="absolute top-1/2 -left-1.5 -translate-y-1/2 w-1.5 h-3 bg-white rounded-sm border border-gray-300 shadow cursor-ew-resize" />
+              <div onPointerDown={(e) => handlePointerDown(e, 'scale', 'e')} className="absolute top-1/2 -right-1.5 -translate-y-1/2 w-1.5 h-3 bg-white rounded-sm border border-gray-300 shadow cursor-ew-resize" />
+
+              {/* Rotate anchor */}
+              <div onPointerDown={(e) => handlePointerDown(e, 'rotate')} className="absolute -bottom-8 left-1/2 -translate-x-1/2 w-6 h-6 bg-white rounded-full shadow flex items-center justify-center cursor-crosshair">
+                <RotateCw className="w-3.5 h-3.5 text-black" />
+              </div>
+            </>
+          )}
+
+          <div
+            ref={textRef}
+            className={cn(
+              clip.animation?.entrance && !isEditing && `anim-${clip.animation.entrance}`,
+              isEditing && "outline-none ring-2 ring-blue-500 rounded-sm"
+            )}
+            style={{
+              fontSize: `${fontSize}px`,
+              fontFamily,
+              color,
+              backgroundColor: bgColor,
+              fontWeight,
+              textAlign: clip.text?.alignment || 'center',
+              fontStyle: clip.text?.fontStyle || 'normal',
+              textTransform: clip.text?.textTransform || 'none',
+              background: 'transparent',
+              padding: '12px',
+              minWidth: '50px',
+              maxWidth: '90%',
+              width: 'fit-content',
+              minHeight: `${fontSize * 1.2}px`,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              display: 'inline-block',
+              cursor: isEditing ? 'text' : (isSelected ? 'move' : 'pointer'),
+              userSelect: isEditing ? 'text' : 'none',
+              pointerEvents: 'auto', // override parent none
+              // Control animation play state
+              animationPlayState: isPlaying ? 'running' : 'paused',
+              animationDelay: `${-(clipTime)}s`,
+              '--anim-duration': `${clip.animation?.duration || 1}s`,
+            } as React.CSSProperties}
+            onPointerDown={(e) => {
+              if (isEditing) {
+                e.stopPropagation();
+              }
+            }}
+            onDoubleClick={(e) => {
+              if (isSelected && !isEditing) {
+                e.stopPropagation();
+                setIsEditing(true);
+              }
+            }}
+            contentEditable={isEditing}
+            suppressContentEditableWarning
+            onInput={(e) => {
+              if (isEditing) {
+                const newTextContent = e.currentTarget.innerHTML || '';
+                if (media.type === 'caption') return; // Do not edit SRT master array natively this way
+                useEditorStore.getState().updateClipProperty(clip.id, 'text', { ...(clip.text || {}), text: newTextContent });
+              }
+            }}
+            onBlur={(e) => {
+              setIsEditing(false);
+              window.getSelection()?.removeAllRanges();
+            }}
+            onClick={(e) => {
+              if (!isSelected) {
+                e.preventDefault();
+              }
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const transitionClass = clip.transition && clipTime < clip.transition.duration ? `trans-${clip.transition.type}` : '';
+  const transitionStyle = {
+    animationPlayState: isPlaying ? 'running' : 'paused',
+    animationDelay: clip.transition ? `${-clipTime}s` : undefined,
+    '--anim-duration': clip.transition ? `${clip.transition.duration}s` : undefined,
+  } as React.CSSProperties;
+
+  const getEffectClasses = (effects?: string[]) => {
+    if (!effects || effects.length === 0) return '';
+    return effects.map(e => {
+      switch (e) {
+        case 'blur': return 'blur-md';
+        case 'glow': return 'drop-shadow-[0_0_15px_rgba(255,255,255,0.8)]';
+        case 'vhs': return 'sepia-[.5] hue-rotate-[15deg] saturate-150 contrast-125';
+        case 'glitch': return 'anim-jitter contrast-150';
+        case 'shake': return 'anim-jitter';
+        case 'zoom': return 'scale-110';
+        case 'flash': return 'contrast-200 brightness-150';
+        case 'rgb': return 'anim-rainbow';
+        case 'pixel': return 'blur-[2px] contrast-150';
+        default: return '';
+      }
+    }).join(' ');
+  };
+
+  const currentEffectsClass = getEffectClasses(clip.effects);
+
   if (media.type === 'video') {
     if (!media.src) {
       return (
-        <img
-          src={media.thumbnail}
-          alt={media.name}
-          style={style}
-          className="absolute inset-0 w-full h-full object-contain"
-        />
+        <div className={cn("absolute inset-0 pointer-events-none", transitionClass)} style={transitionStyle}>
+          <img
+            src={media.thumbnail}
+            alt={media.name}
+            style={style}
+            className={cn("absolute inset-0 w-full h-full object-contain transition-all duration-300", currentEffectsClass)}
+          />
+        </div>
       );
     }
     return (
-      <video
-        ref={mediaRef as React.RefObject<HTMLVideoElement>}
-        src={media.src}
-        style={style}
-        playsInline
-        preload="auto"
-        onLoadedMetadata={(e) => {
-          (e.target as HTMLVideoElement).currentTime = Math.max(0, clipTime);
-        }}
-        className="absolute inset-0 w-full h-full object-contain"
-      />
+      <div className={cn("absolute inset-0 pointer-events-none", transitionClass)} style={transitionStyle}>
+        <video
+          ref={mediaRef as React.RefObject<HTMLVideoElement>}
+          src={media.src}
+          style={style}
+          playsInline
+          preload="auto"
+          onLoadedMetadata={(e) => {
+            (e.target as HTMLVideoElement).currentTime = Math.max(0, clipTime);
+          }}
+          className={cn("absolute inset-0 w-full h-full object-contain transition-all duration-300", currentEffectsClass)}
+        />
+      </div>
     );
   }
 
   if (media.type === 'image') {
     return (
-      <img
-        src={media.src || media.thumbnail}
-        alt={media.name}
-        style={style}
-        className="absolute inset-0 w-full h-full object-contain"
-      />
+      <div className={cn("absolute inset-0 pointer-events-none", transitionClass)} style={transitionStyle}>
+        <img
+          src={media.src || media.thumbnail}
+          alt={media.name}
+          style={style}
+          className={cn("absolute inset-0 w-full h-full object-contain transition-all duration-300", currentEffectsClass)}
+        />
+      </div>
     );
   }
 
@@ -271,14 +619,31 @@ export default function PreviewCanvas() {
 
 
   // Get active clips sorted by layer (overlay on top)
-  const activeClips = tracks.flatMap(track =>
-    track.clips
-      .filter(clip => currentTime >= clip.startTime && currentTime < clip.startTime + clip.duration)
-      .map(clip => ({ clip, track }))
-  ).sort((a, b) => {
-    const order: Record<string, number> = { video: 0, audio: 1, overlay: 2 };
-    return (order[a.track.type] ?? 0) - (order[b.track.type] ?? 0);
-  });
+  const activeClips = tracks.flatMap((track, trackIndex) => {
+    // We need to look ahead to see if the *next* clip has a transition
+    // If it does, and it's physically adjacent, we force this clip to linger visually.
+    const sortedClips = [...track.clips].sort((a, b) => a.startTime - b.startTime);
+    return sortedClips.map((clip, idx) => {
+      let lingerDuration = 0;
+      if (idx < sortedClips.length - 1) {
+        const nextClip = sortedClips[idx + 1];
+        // If next clip touches this one AND has a transition, we linger
+        if (Math.abs(nextClip.startTime - (clip.startTime + clip.duration)) < 0.1) {
+          if (nextClip.transition) {
+            lingerDuration = nextClip.transition.duration;
+          }
+        }
+      }
+      
+      const isCurrentlyActive = currentTime >= clip.startTime && currentTime < (clip.startTime + clip.duration + lingerDuration);
+      
+      if (isCurrentlyActive) {
+        // Embed the linger duration so the ClipLayer can fade it out
+        return { clip: { ...clip, _lingerDuration: lingerDuration }, track, trackIndex };
+      }
+      return null;
+    }).filter(Boolean) as { clip: any, track: any, trackIndex: number }[];
+  }).sort((a, b) => b.trackIndex - a.trackIndex);
 
   const skipFrames = (frames: number) => setCurrentTime(Math.max(0, Math.min(duration, currentTime + frames / 30)));
   const handleSeek = (value: number[]) => setCurrentTime(value[0]);
@@ -317,7 +682,9 @@ export default function PreviewCanvas() {
           </DropdownMenuContent>
         </DropdownMenu>
         <div className="flex-1 flex justify-center px-4">
-          <FloatingToolbar />
+          {(!selectedClip || !selectedClip.mediaId.startsWith('text-')) && (
+            <FloatingToolbar />
+          )}
         </div>
 
         <div className="text-sm text-gray-400 font-mono whitespace-nowrap">
@@ -326,11 +693,24 @@ export default function PreviewCanvas() {
       </div>
 
       {/* Preview area */}
-      <div ref={containerRef as any} className="flex-1 flex items-center justify-center p-4 relative min-h-0 overflow-hidden bg-gray-950">
+      <div
+        ref={containerRef as any}
+        className="flex-1 flex items-center justify-center p-4 relative min-h-0 overflow-hidden bg-gray-950"
+        onPointerDown={(e) => {
+          if (e.target === e.currentTarget && selectedClipId) {
+            useEditorStore.getState().selectClip(null);
+          }
+        }}
+      >
 
         {/* Preview frame with checkerboard background */}
         <div
           ref={previewRef}
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget && selectedClipId) {
+              useEditorStore.getState().selectClip(null);
+            }
+          }}
           style={{
             width: canvasSize.width,
             height: canvasSize.height,

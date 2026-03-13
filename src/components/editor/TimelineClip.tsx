@@ -3,7 +3,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { Video, Image as ImageIcon, Music } from 'lucide-react';
+import { Video, Image as ImageIcon, Music, Subtitles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEditorStore } from '@/store/editorStore';
 import type { TimelineClip, Track } from '@/types/editor';
@@ -50,6 +50,7 @@ export default function TimelineClip({ clip, track, zoom, isSelected }: Timeline
       case 'video': return { bg: 'from-purple-600 to-purple-800', border: 'border-purple-400', header: 'bg-purple-900/50' };
       case 'audio': return { bg: 'from-emerald-600 to-emerald-800', border: 'border-emerald-400', header: 'bg-emerald-900/50' };
       case 'image': return { bg: 'from-blue-600 to-blue-800', border: 'border-blue-400', header: 'bg-blue-900/50' };
+      case 'caption': return { bg: 'from-orange-600 to-orange-800', border: 'border-orange-400', header: 'bg-orange-900/50' };
     }
   };
 
@@ -94,13 +95,22 @@ export default function TimelineClip({ clip, track, zoom, isSelected }: Timeline
       if (isResizing === 'left') {
         if (resizeState.startTime !== clip.startTime || resizeState.duration !== clip.duration) {
           saveToHistory();
+          // We adjust the trimStart by adding the difference in time (how much we visually shrank or grew the left side)
+          const timeDiff = resizeState.startTime - clip.startTime;
+          const newTrimStart = Math.max(0, clip.trimStart + timeDiff);
+
           moveClip(clip.id, resizeState.startTime);
-          updateClipDuration(clip.id, resizeState.duration);
+          updateClipDuration(clip.id, resizeState.duration, newTrimStart, clip.trimEnd);
         }
       } else {
         if (resizeState.duration !== clip.duration) {
           saveToHistory();
-          updateClipDuration(clip.id, resizeState.duration);
+          // When adjusting the right edge, we modify duration. To accurately trim end:
+          // difference is how much shorter it got
+          const timeDiff = clip.duration - resizeState.duration;
+          const newTrimEnd = Math.max(0, clip.trimEnd + timeDiff);
+          
+          updateClipDuration(clip.id, resizeState.duration, clip.trimStart, newTrimEnd);
         }
       }
       setIsResizing(null);
@@ -119,6 +129,7 @@ export default function TimelineClip({ clip, track, zoom, isSelected }: Timeline
       case 'video': return <Video className="w-3 h-3" />;
       case 'audio': return <Music className="w-3 h-3" />;
       case 'image': return <ImageIcon className="w-3 h-3" />;
+      case 'caption': return <Subtitles className="w-3 h-3" />;
     }
   };
 
@@ -158,7 +169,7 @@ export default function TimelineClip({ clip, track, zoom, isSelected }: Timeline
       className={cn(
         'rounded overflow-hidden cursor-grab active:cursor-grabbing group',
         'border-2 transition-all duration-75',
-        isSelected ? 'border-green-400 shadow-lg shadow-green-500/20' : 'border-transparent hover:border-white/30',
+        isSelected && !isResizing ? 'border-green-400 shadow-lg shadow-green-500/20' : 'border-transparent hover:border-white/30',
         isDragging && 'shadow-xl',
         track.locked && 'cursor-not-allowed opacity-70'
       )}
@@ -170,7 +181,7 @@ export default function TimelineClip({ clip, track, zoom, isSelected }: Timeline
       <div className={cn('absolute inset-0 bg-gradient-to-r', colors.bg)} />
       {renderThumbnails()}
       {renderWaveform()}
-      
+
       {/* Header */}
       <div className={cn('absolute top-0 left-0 right-0 h-5 flex items-center px-1.5 gap-1', colors.header)}>
         <span className="flex-shrink-0 opacity-70">{getIcon()}</span>
@@ -178,20 +189,39 @@ export default function TimelineClip({ clip, track, zoom, isSelected }: Timeline
         <span className="text-[9px] text-white/70 bg-black/30 px-1 rounded">{displayDuration.toFixed(1)}s</span>
       </div>
 
-      {/* Trim handles */}
+      {/* Trim handles & Outline */}
+      {isResizing && (
+        <div className="absolute inset-0 border-2 border-green-500 pointer-events-none rounded z-30 flex items-center shadow-[0_0_10px_rgba(34,197,94,0.5)]">
+           <div className="absolute left-0 top-0 bottom-0 w-2 bg-green-500 rounded-l" />
+           <div className="absolute right-0 top-0 bottom-0 w-2 bg-green-500 rounded-r" />
+        </div>
+      )}
+
+      {/* Pop-up Duration Badge */}
+      {isResizing && (
+        <div 
+          className={cn(
+            "absolute top-1 max-w-fit px-1.5 py-0.5 bg-black/80 rounded border border-gray-700 text-white text-[10px] font-mono whitespace-nowrap z-50 pointer-events-none shadow-lg",
+            isResizing === 'left' ? "left-3" : "right-3"
+          )}
+        >
+          {displayDuration.toFixed(1)} s
+        </div>
+      )}
+
       {!track.locked && (
         <>
           <div
-            className={cn('absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-10', 'hover:bg-white/10', isResizing === 'left' ? 'bg-white/20' : 'opacity-0 group-hover:opacity-100 transition-opacity')}
+            className={cn('absolute left-0 top-0 bottom-0 w-4 cursor-ew-resize z-40 flex items-center justify-center', 'hover:bg-white/10', isResizing === 'left' ? 'opacity-100 bg-white/0' : 'opacity-0 group-hover:opacity-100 transition-opacity')}
             onMouseDown={(e) => handleResizeStart(e, 'left')}
           >
-            <div className="w-0.5 h-6 bg-white/50 rounded-full absolute left-1 top-1/2 -translate-y-1/2" />
+            {!isResizing && <div className="w-1 h-6 bg-white/80 rounded-full" />}
           </div>
           <div
-            className={cn('absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-10', 'hover:bg-white/10', isResizing === 'right' ? 'bg-white/20' : 'opacity-0 group-hover:opacity-100 transition-opacity')}
+            className={cn('absolute right-0 top-0 bottom-0 w-4 cursor-ew-resize z-40 flex items-center justify-center', 'hover:bg-white/10', isResizing === 'right' ? 'opacity-100 bg-white/0' : 'opacity-0 group-hover:opacity-100 transition-opacity')}
             onMouseDown={(e) => handleResizeStart(e, 'right')}
           >
-            <div className="w-0.5 h-6 bg-white/50 rounded-full absolute right-1 top-1/2 -translate-y-1/2" />
+            {!isResizing && <div className="w-1 h-6 bg-white/80 rounded-full" />}
           </div>
         </>
       )}

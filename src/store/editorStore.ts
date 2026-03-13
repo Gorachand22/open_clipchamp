@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import type { MediaItem, TimelineClip, Track, EditorState, AspectRatio, ClipTransform, ExportSettings, Marker, Caption, ChromaKeySettings, ColorGradeSettings, BeautySettings, PanZoomSettings, AnimationSettings, Template, MotionPreset } from '@/types/editor';
-import { defaultClipTransform, defaultChromaKey, defaultColorGrade, defaultBeauty, defaultPanZoom, defaultAnimation } from '@/types/editor';
+import type { MediaItem, TimelineClip, Track, EditorState, AspectRatio, ClipTransform, ExportSettings, Marker, Caption, ColorGradeSettings, PanZoomSettings, AnimationSettings, Template, MotionPreset, TextContent } from '@/types/editor';
+import { defaultClipTransform, defaultColorGrade, defaultPanZoom, defaultAnimation, textPresets } from '@/types/editor';
 
 // Sample media items with actual demo content
 const sampleMedia: MediaItem[] = [
@@ -79,6 +79,16 @@ const sampleMedia: MediaItem[] = [
 
 // Initial tracks with proper heights
 const initialTracks: Track[] = [
+  {
+    id: 'track-caption-1',
+    type: 'caption',
+    name: 'Captions',
+    clips: [],
+    muted: false,
+    locked: false,
+    visible: true,
+    height: 48,
+  },
   {
     id: 'track-overlay-1',
     type: 'overlay',
@@ -159,18 +169,179 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   showShortcuts: false,
   showTemplates: false,
   showMusicLibrary: false,
-  showStickers: false,
   showAutoCaptions: false,
   exportSettings: defaultExportSettings,
   history: [] as HistoryState[],
   historyIndex: -1,
   snapEnabled: true,
   snapThreshold: 10,
+  projectName: 'Untitled Project',
+
+  setProjectName: (name) => set({ projectName: name }),
 
   addMedia: (media) => {
     set((state) => ({
       mediaLibrary: [...state.mediaLibrary, { ...media, id: media.id || uuidv4() }],
     }));
+  },
+
+  addMediaInteractive: (mediaId) => {
+    const state = get();
+    let targetTrackId: string | undefined;
+
+    // Direct handling for Text templates
+    if (mediaId.startsWith('text-')) {
+      targetTrackId = state.tracks.find(t => t.type === 'overlay')?.id;
+      if (!targetTrackId) targetTrackId = state.tracks.find(t => t.type === 'video')?.id;
+      if (targetTrackId) {
+        let startTime = state.currentTime;
+        const targetTrack = state.tracks.find(t => t.id === targetTrackId);
+        if (targetTrack && targetTrack.clips.length > 0) {
+          const lastClipEnd = Math.max(...targetTrack.clips.map(c => c.startTime + c.duration));
+          startTime = Math.max(startTime, lastClipEnd);
+        }
+
+        const presetId = mediaId.replace('text-', '');
+        const preset = textPresets.find(p => p.id === presetId) || textPresets[0];
+
+        let fontSize = 60;
+        let fontWeight = 'bold';
+        let fontStyle = 'normal';
+        let textTransform: 'uppercase' | 'lowercase' | 'capitalize' | 'none' = 'none';
+        let bgColor = 'transparent';
+        let text = preset.name;
+        let alignment: 'left' | 'center' | 'right' = 'center';
+
+        if (preset.id === 'headline') {
+          textTransform = 'uppercase';
+          fontSize = 80;
+          fontWeight = '900';
+        } else if (preset.id === 'quote') {
+          fontStyle = 'italic';
+          text = '"Insert Quote Here"';
+          fontSize = 45;
+          fontWeight = 'normal';
+        } else if (preset.id === 'lower-third') {
+          text = 'Name / Title';
+          bgColor = 'rgba(0,0,0,0.5)';
+          alignment = 'left';
+          fontSize = 40;
+          fontWeight = 'normal';
+        } else if (preset.id === 'title-1') {
+          fontSize = 70;
+        } else if (preset.id === 'subtitle-1') {
+          fontSize = 50;
+          fontWeight = '600';
+        } else if (preset.id === 'caption-1') {
+          fontSize = 40;
+          fontWeight = 'normal';
+        }
+
+        const initialTextContent: TextContent = {
+          text,
+          fontFamily: 'Inter, sans-serif',
+          fontSize,
+          fontWeight,
+          fontStyle,
+          textTransform,
+          color: '#FFFFFF',
+          backgroundColor: bgColor,
+          alignment,
+          position: { x: 0, y: 0 }
+        };
+
+        get().addClipToTrack(targetTrackId, {
+          mediaId: mediaId,
+          startTime: startTime,
+          duration: 5,
+        });
+
+        // Add text property to the newly created clip
+        set((state) => {
+          const tracks = state.tracks.map(t => {
+            if (t.id === targetTrackId) {
+              const lastClip = t.clips[t.clips.length - 1]; // The newly added clip
+              return {
+                ...t,
+                clips: t.clips.map(c => c.id === lastClip.id ? { ...c, text: initialTextContent } : c)
+              };
+            }
+            return t;
+          });
+          return { tracks };
+        });
+
+        set({ selectedMediaId: mediaId });
+      }
+      return;
+    }
+
+    const media = state.mediaLibrary.find(m => m.id === mediaId);
+    if (!media) return;
+
+    // Determine target track based on media type
+    if (media.type === 'caption') {
+      targetTrackId = state.tracks.find(t => t.type === 'caption')?.id;
+    } else if (media.type === 'video' || media.type === 'image') {
+      targetTrackId = state.tracks.find(t => t.type === 'video')?.id;
+    } else if (media.type === 'audio') {
+      targetTrackId = state.tracks.find(t => t.type === 'audio')?.id;
+    }
+
+    if (!targetTrackId) {
+      console.warn(`No suitable track found for media type: ${media.type}`);
+      return;
+    }
+
+    const targetTrack = state.tracks.find(t => t.id === targetTrackId);
+    if (!targetTrack) return;
+
+    let startTime = state.currentTime;
+    if (targetTrack.clips.length > 0) {
+      const lastClipEnd = Math.max(...targetTrack.clips.map(c => c.startTime + c.duration));
+      startTime = Math.max(startTime, lastClipEnd);
+    }
+
+    get().addClipToTrack(targetTrackId, {
+      mediaId: media.id,
+      startTime: startTime,
+      duration: media.duration,
+    });
+
+    if (media.type === 'caption') {
+      const initialTextContent: TextContent = {
+        text: 'Caption Template',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: 40,
+        fontWeight: 'normal',
+        fontStyle: 'normal',
+        textTransform: 'none',
+        color: '#FFFFFF',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        alignment: 'center',
+        position: { x: 0, y: 0 }
+      };
+
+      set((state) => {
+        const tracks = state.tracks.map(t => {
+          if (t.id === targetTrackId) {
+            const lastClip = t.clips[t.clips.length - 1]; // The newly added clip
+            return {
+              ...t,
+              clips: t.clips.map(c => c.id === lastClip.id ? {
+                ...c,
+                text: initialTextContent,
+                transform: { ...(c.transform || {}), positionY: 250 } as any
+              } : c)
+            };
+          }
+          return t;
+        });
+        return { tracks };
+      });
+    }
+
+    set({ selectedMediaId: mediaId });
   },
 
   removeMedia: (id) => {
@@ -232,9 +403,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       volume: 1,
       fadeIn: 0,
       fadeOut: 0,
-      chromaKey: { ...defaultChromaKey },
       colorGrade: { ...defaultColorGrade },
-      beauty: { ...defaultBeauty },
       panZoom: { ...defaultPanZoom },
       animation: { ...defaultAnimation },
     };
@@ -331,34 +500,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }));
   },
 
-  updateClipChromaKey: (clipId, settings) => {
-    set((state) => ({
-      tracks: state.tracks.map((t) => ({
-        ...t,
-        clips: t.clips.map((c) =>
-          c.id === clipId ? { ...c, chromaKey: { ...c.chromaKey, ...settings } } : c
-        ),
-      })),
-    }));
-  },
-
   updateClipColorGrade: (clipId, settings) => {
     set((state) => ({
       tracks: state.tracks.map((t) => ({
         ...t,
         clips: t.clips.map((c) =>
-          c.id === clipId ? { ...c, colorGrade: { ...c.colorGrade, ...settings } } : c
-        ),
-      })),
-    }));
-  },
-
-  updateClipBeauty: (clipId, settings) => {
-    set((state) => ({
-      tracks: state.tracks.map((t) => ({
-        ...t,
-        clips: t.clips.map((c) =>
-          c.id === clipId ? { ...c, beauty: { ...c.beauty, ...settings } } : c
+          c.id === clipId ? ({ ...c, colorGrade: { ...(c.colorGrade || {}), ...settings } } as TimelineClip) : c
         ),
       })),
     }));
@@ -369,7 +516,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       tracks: state.tracks.map((t) => ({
         ...t,
         clips: t.clips.map((c) =>
-          c.id === clipId ? { ...c, panZoom: { ...c.panZoom, ...settings } } : c
+          c.id === clipId ? ({ ...c, panZoom: { ...(c.panZoom || {}), ...settings } } as TimelineClip) : c
         ),
       })),
     }));
@@ -380,10 +527,76 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       tracks: state.tracks.map((t) => ({
         ...t,
         clips: t.clips.map((c) =>
-          c.id === clipId ? { ...c, animation: { ...c.animation, ...settings } } : c
+          c.id === clipId ? ({ ...c, animation: { ...(c.animation || {}), ...settings } } as TimelineClip) : c
         ),
       })),
     }));
+  },
+  
+  updateClipSpeed: (clipId, speed) => {
+    set((state) => {
+      const newTracks = state.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => {
+          if (c.id === clipId) {
+            const oldSpeed = c.speed || 1;
+            const mediaObj = state.mediaLibrary.find(m => m.id === c.mediaId);
+            const baseDuration = mediaObj ? mediaObj.duration : (c.duration * oldSpeed);
+
+            // New duration based on the underlying base media duration
+            const newDuration = Math.max(0.1, baseDuration / speed);
+            
+            return {
+              ...c,
+              speed,
+              duration: newDuration,
+            };
+          }
+          return c;
+        }),
+      }));
+      return { tracks: newTracks, duration: calculateDuration(newTracks) };
+    });
+  },
+
+  removeGap: (trackId, afterClipId) => {
+    set((state) => {
+      const trackIndex = state.tracks.findIndex(t => t.id === trackId);
+      if (trackIndex === -1) return state;
+
+      const track = state.tracks[trackIndex];
+      const sortedClips = [...track.clips].sort((a, b) => a.startTime - b.startTime);
+      const afterIndex = sortedClips.findIndex(c => c.id === afterClipId);
+      
+      if (afterIndex === -1 || afterIndex === sortedClips.length - 1) return state;
+
+      const currentClip = sortedClips[afterIndex];
+      const nextClip = sortedClips[afterIndex + 1];
+      
+      const gapEnd = nextClip.startTime;
+      const gapStart = currentClip.startTime + currentClip.duration;
+      const gapDuration = gapEnd - gapStart;
+
+      if (gapDuration <= 0.05) return state; // Gap too small to bother
+
+      // Create new tracks array with all clips after the gap shifted left by gapDuration
+      const newTracks = state.tracks.map((t) => {
+        if (t.id === trackId) {
+          return {
+            ...t,
+            clips: t.clips.map(c => {
+               if (c.startTime >= gapEnd - 0.01) {
+                  return { ...c, startTime: Math.max(gapStart, c.startTime - gapDuration) };
+               }
+               return c;
+            })
+          };
+        }
+        return t;
+      });
+
+      return { tracks: newTracks, duration: calculateDuration(newTracks) };
+    });
   },
 
   selectClip: (clipId) => set({ selectedClipId: clipId, selectedMediaId: null }),
@@ -632,7 +845,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       tracks: state.tracks.map((t) => ({
         ...t,
         clips: t.clips.map((c) =>
-          c.id === clipId ? { ...c, motionPreset: preset.id, animation: { ...c.animation, entrance: preset.id } } : c
+          c.id === clipId ? ({ ...c, motionPreset: preset.id, animation: { ...(c.animation || {}), entrance: preset.id } } as TimelineClip) : c
         ),
       })),
     }));

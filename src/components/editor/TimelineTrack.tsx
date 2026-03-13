@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useDroppable } from '@dnd-kit/core';
-import { Eye, EyeOff, Volume2, VolumeX, Lock, Unlock, Video, Music, Layers, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Volume2, VolumeX, Lock, Unlock, Video, Music, Layers, Trash2, Subtitles, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEditorStore } from '@/store/editorStore';
 import TimelineClip from './TimelineClip';
@@ -17,7 +17,7 @@ interface TimelineTrackProps {
 }
 
 export default function TimelineTrack({ track, zoom, currentTime, canDelete = false, onDelete }: TimelineTrackProps) {
-  const { toggleTrackMute, toggleTrackLock, selectedClipId } = useEditorStore();
+  const { toggleTrackMute, toggleTrackLock, selectedClipId, removeGap, updateClipProperty, selectClip, setActivePropertyTab } = useEditorStore();
 
   const { setNodeRef, isOver } = useDroppable({
     id: `track-${track.id}`,
@@ -31,6 +31,7 @@ export default function TimelineTrack({ track, zoom, currentTime, canDelete = fa
       case 'video': return <Video className="w-3 h-3" />;
       case 'audio': return <Music className="w-3 h-3" />;
       case 'overlay': return <Layers className="w-3 h-3" />;
+      case 'caption': return <Subtitles className="w-3 h-3" />;
     }
   };
 
@@ -39,6 +40,7 @@ export default function TimelineTrack({ track, zoom, currentTime, canDelete = fa
       case 'video': return 'text-purple-400';
       case 'audio': return 'text-green-400';
       case 'overlay': return 'text-blue-400';
+      case 'caption': return 'text-orange-400';
     }
   };
 
@@ -47,8 +49,12 @@ export default function TimelineTrack({ track, zoom, currentTime, canDelete = fa
       case 'video': return 'from-purple-900/20 to-transparent';
       case 'audio': return 'from-green-900/20 to-transparent';
       case 'overlay': return 'from-blue-900/20 to-transparent';
+      case 'caption': return 'from-orange-900/20 to-transparent';
     }
   };
+
+  // Sort clips to find gaps
+  const sortedClips = [...track.clips].sort((a, b) => a.startTime - b.startTime);
 
   return (
     <div className="flex border-b border-gray-700/50 group" style={{ height: trackHeight + 4 }}>
@@ -58,7 +64,7 @@ export default function TimelineTrack({ track, zoom, currentTime, canDelete = fa
           <span className={cn(getTrackColor())}>{getTrackIcon()}</span>
           <span className="text-xs text-gray-300 truncate font-medium">{track.name}</span>
         </div>
-        
+
         <div className="flex items-center gap-0.5 flex-shrink-0">
           <button
             onClick={() => toggleTrackMute(track.id)}
@@ -70,7 +76,7 @@ export default function TimelineTrack({ track, zoom, currentTime, canDelete = fa
           >
             {track.muted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
           </button>
-          
+
           <button
             onClick={() => toggleTrackLock(track.id)}
             className={cn(
@@ -81,7 +87,7 @@ export default function TimelineTrack({ track, zoom, currentTime, canDelete = fa
           >
             {track.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
           </button>
-          
+
           {canDelete && (
             <button
               onClick={onDelete}
@@ -106,16 +112,72 @@ export default function TimelineTrack({ track, zoom, currentTime, canDelete = fa
         style={{ height: trackHeight + 4 }}
       >
         {/* Clips */}
-        {track.clips.map((clip) => (
-          <TimelineClip key={clip.id} clip={clip} track={track} zoom={zoom} isSelected={selectedClipId === clip.id} />
-        ))}
+        {sortedClips.map((clip, index) => {
+          let hasGap = false;
+          let gapDuration = 0;
+          let gapStartX = 0;
+          let isAdjacent = false;
+          let adjacentX = 0;
+          
+          if (index < sortedClips.length - 1) {
+            const nextClip = sortedClips[index + 1];
+            gapDuration = nextClip.startTime - (clip.startTime + clip.duration);
+            if (gapDuration > 0.05) {
+              hasGap = true;
+              gapStartX = (clip.startTime + clip.duration) * zoom;
+            } else if (gapDuration >= -0.1 && gapDuration <= 0.05) {
+              // Clips are touching or very close
+              isAdjacent = true;
+              adjacentX = (clip.startTime + clip.duration) * zoom;
+            }
+          }
+
+          const handleAddTransition = (e: React.MouseEvent) => {
+            e.stopPropagation();
+            // Default transition
+            updateClipProperty(clip.id, 'transition', { type: 'dissolve', duration: 1, easing: 'linear' });
+            selectClip(clip.id);
+            setActivePropertyTab('effects');
+          };
+
+          return (
+            <React.Fragment key={clip.id}>
+              <TimelineClip clip={clip} track={track} zoom={zoom} isSelected={selectedClipId === clip.id} />
+              
+              {hasGap && !track.locked && (
+                <div 
+                  className="absolute top-0 bottom-0 z-20 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity cursor-pointer group/gap"
+                  style={{ left: gapStartX, width: gapDuration * zoom }}
+                  onClick={() => removeGap(track.id, clip.id)}
+                >
+                  <div className="bg-red-500/80 hover:bg-red-500 text-white p-1 rounded-full shadow-lg transform scale-75 group-hover/gap:scale-100 transition-all">
+                    <Trash2 className="w-3 h-3" />
+                  </div>
+                </div>
+              )}
+
+              {isAdjacent && !track.locked && (
+                <div 
+                  className="absolute top-0 bottom-0 z-30 flex items-center justify-center opacity-0 hover:opacity-100 transition-all cursor-pointer group/trans"
+                  style={{ left: adjacentX - 10, width: 20 }}
+                  onClick={handleAddTransition}
+                  title="Add Transition"
+                >
+                  <div className="bg-purple-600 hover:bg-purple-500 text-white p-0.5 rounded shadow-lg transform scale-90 group-hover/trans:scale-110 transition-all border border-purple-400">
+                    <Plus className="w-3.5 h-3.5" />
+                  </div>
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
 
         {/* Empty audio placeholder */}
         {track.type === 'audio' && track.clips.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="flex items-center gap-0.5 opacity-15">
               {Array.from({ length: 200 }).map((_, i) => (
-                <div key={i} className="w-0.5 bg-green-400 rounded-full" style={{ height: `${4 + Math.abs(Math.sin(i * 0.3)) * 16}px` }} />
+                <div key={i} className="w-0.5 bg-green-400 rounded-full" style={{ height: `${Math.round(4 + Math.abs(Math.sin(i * 0.3)) * 16)}px` }} />
               ))}
             </div>
           </div>

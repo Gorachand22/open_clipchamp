@@ -1,4 +1,4 @@
-export type MediaType = 'video' | 'audio' | 'image';
+export type MediaType = 'video' | 'audio' | 'image' | 'caption';
 
 export interface MediaItem {
   id: string;
@@ -10,6 +10,7 @@ export interface MediaItem {
   width?: number;
   height?: number;
   file?: File;
+  captions?: { id: string; startTime: number; endTime: number; text: string }[];
 }
 
 export interface Keyframe {
@@ -38,12 +39,10 @@ export interface TimelineClip {
   keyframes?: Keyframe[];
   text?: TextContent;
   // New CapCut Pro features
-  chromaKey?: ChromaKeySettings;
   blendingMode?: BlendingMode;
   motionPreset?: string;
   animation?: AnimationSettings;
   panZoom?: PanZoomSettings;
-  beauty?: BeautySettings;
   colorGrade?: ColorGradeSettings;
   transition?: TransitionSettings;
 }
@@ -60,6 +59,8 @@ export interface TextContent {
   animation?: string;
   outline?: TextOutline;
   shadow?: TextShadow;
+  fontStyle?: string;
+  textTransform?: 'uppercase' | 'lowercase' | 'capitalize' | 'none';
 }
 
 export interface TextOutline {
@@ -85,22 +86,14 @@ export interface ClipTransform {
   positionY: number;
 }
 
-export interface ChromaKeySettings {
-  enabled: boolean;
-  keyColor: string; // hex color
-  similarity: number; // 0-100
-  smoothness: number; // 0-100
-  feather: number; // 0-100
-}
-
-export type BlendingMode = 
-  | 'normal' 
-  | 'multiply' 
-  | 'screen' 
-  | 'overlay' 
-  | 'darken' 
-  | 'lighten' 
-  | 'color-dodge' 
+export type BlendingMode =
+  | 'normal'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
   | 'color-burn'
   | 'hard-light'
   | 'soft-light'
@@ -126,16 +119,6 @@ export interface PanZoomSettings {
   easing: string;
 }
 
-export interface BeautySettings {
-  enabled: boolean;
-  smoothSkin: number; // 0-100
-  brightenEyes: number; // 0-100
-  whitenTeeth: number; // 0-100
-  slimFace: number; // 0-100
-  enlargeEyes: number; // 0-100
-  sharpen: number; // 0-100
-}
-
 export interface ColorGradeSettings {
   preset?: string;
   exposure: number; // -100 to 100
@@ -157,7 +140,7 @@ export interface TransitionSettings {
 
 export interface Track {
   id: string;
-  type: 'video' | 'audio' | 'overlay';
+  type: 'video' | 'audio' | 'overlay' | 'caption';
   name: string;
   clips: TimelineClip[];
   muted: boolean;
@@ -227,16 +210,6 @@ export interface MusicTrack {
   waveform: number[];
   src: string;
 }
-
-export interface Sticker {
-  id: string;
-  name: string;
-  category: string;
-  emoji?: string;
-  image?: string;
-  animated: boolean;
-}
-
 export interface MotionPreset {
   id: string;
   name: string;
@@ -248,111 +221,114 @@ export interface MotionPreset {
 export interface EditorState {
   // Media library
   mediaLibrary: MediaItem[];
-  
+
   // Timeline
   tracks: Track[];
   markers: Marker[];
   captions: Caption[];
-  
+
   // Selection
   selectedClipId: string | null;
   selectedMediaId: string | null;
   selectedTrackId: string | null;
-  
+
   // Playback
   currentTime: number;
   duration: number;
   isPlaying: boolean;
   volume: number;
-  
+
   // Timeline zoom and scroll
   zoom: number;
   scrollPosition: number;
   snapEnabled: boolean;
   snapThreshold: number;
-  
+
   // Preview
   aspectRatio: AspectRatio;
   isFullscreen: boolean;
-  
+
   // UI state
   activeMediaTab: string;
   activePropertyTab: string;
   showShortcuts: boolean;
   showTemplates: boolean;
   showMusicLibrary: boolean;
-  showStickers: boolean;
   showAutoCaptions: boolean;
-  
+
+  // Project Settings
+  projectName: string;
+  setProjectName: (name: string) => void;
+
   // Export
   exportSettings: ExportSettings;
-  
+
   // History for undo/redo
   history: Partial<EditorState>[];
   historyIndex: number;
-  
+
   // Actions
   addMedia: (media: MediaItem) => void;
   removeMedia: (id: string) => void;
-  
-  addClipToTrack: (trackId: string, clip: Omit<TimelineClip, 'id' | 'trackId' | 'transform'>) => void;
+  addMediaInteractive: (mediaId: string) => void;
+
+  addClipToTrack: (trackId: string, clip: Partial<TimelineClip> & { mediaId: string, startTime: number, duration: number }) => void;
   removeClip: (clipId: string) => void;
   moveClip: (clipId: string, newStartTime: number, newTrackId?: string) => void;
   updateClipDuration: (clipId: string, duration: number, trimStart?: number, trimEnd?: number) => void;
   updateClipTransform: (clipId: string, transform: Partial<ClipTransform>) => void;
   updateClipProperty: (clipId: string, property: string, value: unknown) => void;
-  updateClipChromaKey: (clipId: string, settings: Partial<ChromaKeySettings>) => void;
   updateClipColorGrade: (clipId: string, settings: Partial<ColorGradeSettings>) => void;
-  updateClipBeauty: (clipId: string, settings: Partial<BeautySettings>) => void;
   updateClipPanZoom: (clipId: string, settings: Partial<PanZoomSettings>) => void;
-  updateClipAnimation: (clipId: string, settings: Partial<AnimationSettings>) => void;
-  
+  updateClipSpeed: (clipId: string, speed: number) => void;
+  removeGap: (trackId: string, afterClipId: string) => void;
+
   selectClip: (clipId: string | null) => void;
   selectMedia: (mediaId: string | null) => void;
   selectTrack: (trackId: string | null) => void;
-  
+
   setCurrentTime: (time: number) => void;
   play: () => void;
   pause: () => void;
   togglePlay: () => void;
   setVolume: (volume: number) => void;
-  
+
   setZoom: (zoom: number) => void;
   setScrollPosition: (position: number) => void;
   zoomToFit: () => void;
-  
+
   setAspectRatio: (ratio: AspectRatio) => void;
   setFullscreen: (fullscreen: boolean) => void;
-  
+
   setActiveMediaTab: (tab: string) => void;
   setActivePropertyTab: (tab: string) => void;
   setShowShortcuts: (show: boolean) => void;
-  
+
   addTrack: (type: 'video' | 'audio' | 'overlay') => void;
   removeTrack: (trackId: string) => void;
   toggleTrackMute: (trackId: string) => void;
   toggleTrackLock: (trackId: string) => void;
-  
+
   undo: () => void;
   redo: () => void;
   saveToHistory: () => void;
-  
+
   splitClipAtPlayhead: () => void;
   deleteSelectedClip: () => void;
-  
+
   addMarker: (time: number, label: string) => void;
   removeMarker: (id: string) => void;
-  
+
   addCaption: (caption: Omit<Caption, 'id'>) => void;
   updateCaption: (id: string, caption: Partial<Caption>) => void;
   removeCaption: (id: string) => void;
   autoGenerateCaptions: () => void;
-  
+
   applyTemplate: (template: Template) => void;
   applyMotionPreset: (clipId: string, preset: MotionPreset) => void;
-  
+
   setExportSettings: (settings: Partial<ExportSettings>) => void;
-  
+
   getMediaById: (id: string) => MediaItem | undefined;
   getClipById: (id: string) => TimelineClip | undefined;
   getTrackById: (id: string) => Track | undefined;
@@ -372,15 +348,6 @@ export const defaultClipTransform: ClipTransform = {
   positionY: 0,
 };
 
-// Default chroma key settings
-export const defaultChromaKey: ChromaKeySettings = {
-  enabled: false,
-  keyColor: '#00ff00',
-  similarity: 50,
-  smoothness: 50,
-  feather: 10,
-};
-
 // Default color grade settings
 export const defaultColorGrade: ColorGradeSettings = {
   exposure: 0,
@@ -392,17 +359,6 @@ export const defaultColorGrade: ColorGradeSettings = {
   highlights: 0,
   shadows: 0,
   vignette: 0,
-};
-
-// Default beauty settings
-export const defaultBeauty: BeautySettings = {
-  enabled: false,
-  smoothSkin: 0,
-  brightenEyes: 0,
-  whitenTeeth: 0,
-  slimFace: 0,
-  enlargeEyes: 0,
-  sharpen: 0,
 };
 
 // Default pan/zoom settings
@@ -491,25 +447,28 @@ export const motionPresets: MotionPreset[] = [
 
 // Transitions
 export const transitions = [
+  // basic: None, Fade, Dissolve, wipe, Wipe Left, Wipe Right, Wipe Up, Wipe Down
   { id: 'none', name: 'None', icon: '○', category: 'basic' },
   { id: 'fade', name: 'Fade', icon: '◐', category: 'basic' },
   { id: 'dissolve', name: 'Dissolve', icon: '◑', category: 'basic' },
-  { id: 'wipe-left', name: 'Wipe Left', icon: '◀', category: 'wipe' },
-  { id: 'wipe-right', name: 'Wipe Right', icon: '▶', category: 'wipe' },
-  { id: 'wipe-up', name: 'Wipe Up', icon: '△', category: 'wipe' },
-  { id: 'wipe-down', name: 'Wipe Down', icon: '▽', category: 'wipe' },
-  { id: 'zoom', name: 'Zoom', icon: '⊕', category: 'motion' },
-  { id: 'zoom-blur', name: 'Zoom Blur', icon: '◎', category: 'motion' },
-  { id: 'spin', name: 'Spin', icon: '↻', category: 'motion' },
+  { id: 'wipe', name: 'Wipe', icon: '◨', category: 'basic' },
+  { id: 'wipe-left', name: 'Wipe Left', icon: '◀', category: 'basic' },
+  { id: 'wipe-right', name: 'Wipe Right', icon: '▶', category: 'basic' },
+  { id: 'wipe-up', name: 'Wipe Up', icon: '△', category: 'basic' },
+  { id: 'wipe-down', name: 'Wipe Down', icon: '▽', category: 'basic' },
+  // slide: Slide Left, Slide Right, Push, motion, Zoom, Zoom Blur, Spin
   { id: 'slide-left', name: 'Slide Left', icon: '⏵', category: 'slide' },
   { id: 'slide-right', name: 'Slide Right', icon: '⏴', category: 'slide' },
   { id: 'push', name: 'Push', icon: '⏩', category: 'slide' },
+  { id: 'motion', name: 'Motion', icon: '⧨', category: 'slide' },
+  { id: 'zoom', name: 'Zoom', icon: '⊕', category: 'slide' },
+  { id: 'zoom-blur', name: 'Zoom Blur', icon: '◎', category: 'slide' },
+  { id: 'spin', name: 'Spin', icon: '↻', category: 'slide' },
+  // effects: Glitch, Flash, Blur, Pixelate
   { id: 'glitch', name: 'Glitch', icon: '⚌', category: 'effects' },
   { id: 'flash', name: 'Flash', icon: '⚡', category: 'effects' },
   { id: 'blur', name: 'Blur', icon: '◌', category: 'effects' },
   { id: 'pixelate', name: 'Pixelate', icon: '▦', category: 'effects' },
-  { id: 'luma', name: 'Luma Fade', icon: '◈', category: 'advanced' },
-  { id: 'morph', name: 'Morph', icon: '◇', category: 'advanced' },
 ];
 
 // Text animations
@@ -525,6 +484,16 @@ export const textAnimations = [
   { id: 'jitter', name: 'Jitter', category: 'emphasis' },
   { id: 'rainbow', name: 'Rainbow', category: 'emphasis' },
   { id: 'neon-pulse', name: 'Neon Pulse', category: 'emphasis' },
+];
+
+// Text presets
+export const textPresets = [
+  { id: 'title-1', name: 'Title', preview: 'Aa', style: 'bold' },
+  { id: 'subtitle-1', name: 'Subtitle', preview: 'Aa', style: 'medium' },
+  { id: 'caption-1', name: 'Caption', preview: 'Aa', style: 'normal' },
+  { id: 'headline', name: 'Headline', preview: 'HEAD', style: 'bold' },
+  { id: 'lower-third', name: 'Lower Third', preview: '━━━', style: 'normal' },
+  { id: 'quote', name: 'Quote', preview: '"', style: 'normal' },
 ];
 
 // Color grading presets (cinematic looks)
@@ -543,32 +512,6 @@ export const colorGradePresets = [
   { id: 'dramatic', name: 'Dramatic', settings: { contrast: 35, saturation: -5, highlights: -20, shadows: 10 } },
 ];
 
-// Stickers library
-export const stickersLibrary: Sticker[] = [
-  // Emojis
-  { id: 'emoji-fire', name: 'Fire', category: 'emoji', emoji: '🔥', animated: false },
-  { id: 'emoji-heart', name: 'Heart', category: 'emoji', emoji: '❤️', animated: false },
-  { id: 'emoji-star', name: 'Star', category: 'emoji', emoji: '⭐', animated: false },
-  { id: 'emoji-sparkles', name: 'Sparkles', category: 'emoji', emoji: '✨', animated: false },
-  { id: 'emoji-thumbsup', name: 'Thumbs Up', category: 'emoji', emoji: '👍', animated: false },
-  { id: 'emoji-rocket', name: 'Rocket', category: 'emoji', emoji: '🚀', animated: false },
-  { id: 'emoji-100', name: '100', category: 'emoji', emoji: '💯', animated: false },
-  { id: 'emoji-party', name: 'Party', category: 'emoji', emoji: '🎉', animated: false },
-  { id: 'emoji-clap', name: 'Clap', category: 'emoji', emoji: '👏', animated: false },
-  { id: 'emoji-crown', name: 'Crown', category: 'emoji', emoji: '👑', animated: false },
-  // Shapes
-  { id: 'shape-circle', name: 'Circle', category: 'shapes', emoji: '⭕', animated: false },
-  { id: 'shape-star', name: 'Star Shape', category: 'shapes', emoji: '☆', animated: false },
-  { id: 'shape-diamond', name: 'Diamond', category: 'shapes', emoji: '💎', animated: false },
-  // Arrows
-  { id: 'arrow-right', name: 'Arrow Right', category: 'arrows', emoji: '➡️', animated: false },
-  { id: 'arrow-up', name: 'Arrow Up', category: 'arrows', emoji: '⬆️', animated: false },
-  { id: 'arrow-down', name: 'Arrow Down', category: 'arrows', emoji: '⬇️', animated: false },
-  // Social
-  { id: 'social-follow', name: 'Follow', category: 'social', emoji: '➕', animated: false },
-  { id: 'social-like', name: 'Like', category: 'social', emoji: '💗', animated: false },
-  { id: 'social-subscribe', name: 'Subscribe', category: 'social', emoji: '🔔', animated: false },
-];
 
 // Blending modes
 export const blendingModes: { id: BlendingMode; name: string }[] = [

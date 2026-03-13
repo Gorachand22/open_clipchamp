@@ -16,6 +16,7 @@ import { Video, Settings, HelpCircle, ChevronDown, Download, Keyboard, X, Image 
 import MediaLibrary from '@/components/editor/MediaLibrary';
 import PreviewCanvas from '@/components/editor/PreviewCanvas';
 import Timeline from '@/components/editor/Timeline';
+import ExportDialog from '@/components/editor/ExportDialog';
 import PropertyPanel from '@/components/editor/PropertyPanel';
 import { useEditorStore } from '@/store/editorStore';
 import { Button } from '@/components/ui/button';
@@ -52,6 +53,8 @@ export default function Home() {
     getClipById,
     showShortcuts,
     setShowShortcuts,
+    projectName,
+    setProjectName,
   } = useEditorStore();
 
   // IDE-to-Editor sync - enables OpenCode IDE to control the editor
@@ -165,6 +168,14 @@ export default function Home() {
 
       if (targetTrackId) {
         const track = tracks.find(t => t.id === targetTrackId);
+
+        // Strict drop validation
+        if (track) {
+          const isTextMedia = media.id.startsWith('text-');
+          if (media.type === 'audio' && track.type !== 'audio') return; // Cannot drop audio on video/overlay
+          if ((media.type === 'video' || media.type === 'image' || isTextMedia) && track.type === 'audio') return; // Cannot drop video/text on audio track
+        }
+
         let newStartTime = 0;
 
         if (track && track.clips.length > 0) {
@@ -195,6 +206,17 @@ export default function Home() {
         newTrackId = overData.trackId;
       }
 
+      // Re-validate if track type changed
+      const targetTrack = tracks.find(t => t.id === newTrackId);
+      if (targetTrack) {
+        const sourceMedia = mediaLibrary.find(m => m.id === clip.mediaId) || (clip.mediaId.startsWith('text-') ? { type: 'video' } as any : null);
+        if (sourceMedia) {
+          const isTextMedia = clip.mediaId.startsWith('text-');
+          if (sourceMedia.type === 'audio' && targetTrack.type !== 'audio') return;
+          if ((sourceMedia.type === 'video' || sourceMedia.type === 'image' || isTextMedia) && targetTrack.type === 'audio') return;
+        }
+      }
+
       if (snappedTime !== clip.startTime || newTrackId !== data.trackId) {
         saveToHistory();
         moveClip(data.clipId, snappedTime, newTrackId);
@@ -205,7 +227,15 @@ export default function Home() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable) ||
+        (e.target instanceof Element && e.target.closest('[contenteditable="true"]')) ||
+        document.activeElement?.tagName === 'INPUT' ||
+        document.activeElement?.tagName === 'TEXTAREA' ||
+        (document.activeElement as HTMLElement)?.isContentEditable
+      ) return;
 
       const state = useEditorStore.getState();
 
@@ -221,7 +251,7 @@ export default function Home() {
       } else if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         state.splitClipAtPlayhead();
-      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      } else if (e.key === 'Delete') {
         e.preventDefault();
         state.deleteSelectedClip();
       } else if (e.key === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
@@ -295,7 +325,7 @@ export default function Home() {
   ];
 
   return (
-    <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+    <DndContext id="dnd-context" sensors={sensors} collisionDetection={pointerWithin} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="h-screen w-screen flex flex-col bg-gray-950 text-white overflow-hidden">
         {/* Header */}
         <header className="h-12 bg-gray-900 border-b border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
@@ -305,9 +335,12 @@ export default function Home() {
               <span className="font-semibold text-sm">Video Editor Pro</span>
             </div>
             <div className="h-4 w-px bg-gray-700" />
-            <span className="flex items-center gap-1 text-sm text-gray-300">
-              Untitled Project
-            </span>
+            <input
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              className="bg-transparent border-transparent hover:border-gray-700 focus:border-purple-500 rounded px-2 py-1 text-sm text-gray-300 focus:outline-none focus:ring-1 focus:ring-purple-500 w-48 transition-all"
+              placeholder="Project Name"
+            />
           </div>
 
           <div className="flex items-center gap-3">
@@ -329,10 +362,7 @@ export default function Home() {
               <Keyboard className="w-4 h-4" />
             </Button>
 
-            <Button className="bg-purple-600 hover:bg-purple-700 text-white gap-2 h-8 text-sm">
-              <Download className="w-4 h-4" />
-              Export
-            </Button>
+            <ExportDialog />
           </div>
         </header>
 
