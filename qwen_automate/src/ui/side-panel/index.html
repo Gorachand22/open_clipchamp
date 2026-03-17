@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Qwen Automation</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(180deg, #0f0f1a 0%, #1a1a2e 100%);
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 16px;
+      font-size: 13px;
+    }
+
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid rgba(139, 92, 246, 0.3);
+    }
+
+    .logo {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 8px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #8b5cf6 0%, #06b6d4 100%);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header p {
+      font-size: 11px;
+      color: #888;
+    }
+
+    /* Status Section */
+    .status-section {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .status-row:last-child { border-bottom: none; }
+
+    .status-label {
+      font-size: 11px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-value {
+      font-size: 12px;
+      font-weight: 500;
+      color: #fff;
+    }
+
+    .status-value.connected { color: #4ade80; }
+    .status-value.disconnected { color: #ef4444; }
+    .status-value.warning { color: #fbbf24; }
+
+    .mode-indicator {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    .mode-indicator.bridge {
+      background: rgba(34, 197, 94, 0.2);
+      color: #22c55e;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .mode-indicator.manual {
+      background: rgba(251, 191, 36, 0.2);
+      color: #fbbf24;
+      border: 1px solid rgba(251, 191, 36, 0.3);
+    }
+
+    /* Form */
+    .task-form {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(139, 92, 246, 0.2);
+    }
+
+    .form-group { margin-bottom: 12px; }
+
+    .form-group label {
+      display: block;
+      font-size: 11px;
+      color: #aaa;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-group input,
+    .form-group textarea,
+    .form-group select {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: #fff;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-group input:focus,
+    .form-group textarea:focus,
+    .form-group select:focus {
+      border-color: #8b5cf6;
+    }
+
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+      font-family: inherit;
+    }
+
+    .form-group select option {
+      background: #1a1a2e;
+      color: #fff;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    /* Image Upload */
+    .image-upload-section { display: none; }
+
+    .image-upload-area {
+      border: 2px dashed rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .image-upload-area:hover,
+    .image-upload-area.dragover {
+      border-color: #8b5cf6;
+      background: rgba(139, 92, 246, 0.1);
+    }
+
+    .image-upload-area.has-image {
+      border-style: solid;
+      border-color: #22c55e;
+    }
+
+    .upload-icon {
+      font-size: 24px;
+      margin-bottom: 8px;
+      opacity: 0.6;
+    }
+
+    .upload-text {
+      font-size: 12px;
+      color: #888;
+    }
+
+    .image-preview-container {
+      display: none;
+    }
+
+    .image-preview {
+      max-width: 100%;
+      max-height: 120px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+
+    /* Buttons */
+    button {
+      width: 100%;
+      background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+    }
+
+    button:disabled {
+      background: #444;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      margin-top: 8px;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.15);
+      box-shadow: none;
+    }
+
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .btn-row button { margin-top: 0; }
+
+    /* Tasks List */
+    .tasks-section {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      margin-bottom: 16px;
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+    }
+
+    .task-item {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+      border-left: 3px solid #8b5cf6;
+    }
+
+    .task-item:last-child { margin-bottom: 0; }
+
+    .task-item.running {
+      border-left-color: #3b82f6;
+      animation: pulse 1.5s infinite;
+    }
+
+    .task-item.completed { border-left-color: #22c55e; }
+
+    .task-item.failed { border-left-color: #ef4444; }
+
+    .task-id {
+      font-size: 10px;
+      color: #666;
+      font-family: monospace;
+      margin-bottom: 4px;
+    }
+
+    .task-prompt {
+      font-size: 12px;
+      color: #fff;
+      margin-bottom: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .task-meta {
+      display: flex;
+      gap: 8px;
+      font-size: 10px;
+      color: #666;
+    }
+
+    .task-meta span {
+      padding: 2px 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+    }
+
+    .task-status {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .task-status.pending {
+      background: rgba(251, 191, 36, 0.2);
+      color: #fbbf24;
+    }
+
+    .task-status.running {
+      background: rgba(59, 130, 246, 0.2);
+      color: #3b82f6;
+    }
+
+    .task-status.completed {
+      background: rgba(34, 197, 94, 0.2);
+      color: #22c55e;
+    }
+
+    .task-status.failed {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 20px;
+      color: #555;
+      font-size: 12px;
+    }
+
+    /* Log */
+    .log-section {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 12px;
+      padding: 12px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    .log-entry {
+      font-size: 10px;
+      color: #555;
+      padding: 2px 0;
+      font-family: 'Monaco', 'Menlo', monospace;
+    }
+
+    .log-entry.error { color: #ef4444; }
+    .log-entry.success { color: #22c55e; }
+    .log-entry.warning { color: #fbbf24; }
+    .log-entry.info { color: #888; }
+
+    /* Help */
+    .help-section {
+      background: rgba(139, 92, 246, 0.1);
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 16px;
+      border: 1px solid rgba(139, 92, 246, 0.2);
+    }
+
+    .help-title {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #8b5cf6;
+    }
+
+    .help-text {
+      font-size: 11px;
+      color: #888;
+      line-height: 1.5;
+    }
+
+    .help-text ol {
+      margin-left: 16px;
+    }
+
+    .help-text li {
+      margin-bottom: 4px;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">✨</div>
+    <h1>Qwen Automation</h1>
+    <p>AI Image & Video Generation</p>
+  </div>
+
+  <!-- Status -->
+  <div class="status-section">
+    <div class="status-row">
+      <span class="status-label">Mode</span>
+      <span id="mode-status">
+        <span class="mode-indicator manual">Manual</span>
+      </span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Bridge</span>
+      <span class="status-value" id="bridge-status">Checking...</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Qwen Tab</span>
+      <span class="status-value" id="qwen-status">Not detected</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Task Status</span>
+      <span class="status-value" id="task-status">Idle</span>
+    </div>
+  </div>
+
+  <!-- Task Form -->
+  <div class="task-form">
+    <div class="form-group">
+      <label>Generation Type</label>
+      <select id="mode-select">
+        <option value="textToImage">Text to Image</option>
+        <option value="textToVideo">Text to Video</option>
+        <option value="imageToVideo">Image to Video</option>
+      </select>
+    </div>
+
+    <!-- Image Upload for image-to-video -->
+    <div class="image-upload-section" id="image-upload-section">
+      <div class="form-group">
+        <label>Upload Image</label>
+        <div class="image-upload-area" id="image-upload-area">
+          <input type="file" id="image-input" accept="image/*" style="display: none;">
+          <div id="upload-placeholder">
+            <div class="upload-icon">📷</div>
+            <div class="upload-text">Click or drag image here</div>
+          </div>
+          <div class="image-preview-container" id="image-preview-container">
+            <img id="image-preview" class="image-preview" alt="Preview">
+            <div class="upload-text">Click to change</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Prompt</label>
+      <textarea id="prompt-input" placeholder="Describe what you want to generate..."></textarea>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Aspect Ratio</label>
+        <select id="ratio-select">
+          <option value="1:1">1:1 (Square)</option>
+          <option value="9:16">9:16 (Portrait)</option>
+          <option value="16:9">16:9 (Landscape)</option>
+          <option value="3:4">3:4</option>
+          <option value="4:3">4:3</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>&nbsp;</label>
+        <button id="submit-btn">Generate</button>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button id="open-qwen-btn" class="btn-secondary">Open Qwen</button>
+      <button id="refresh-btn" class="btn-secondary">Refresh</button>
+    </div>
+  </div>
+
+  <!-- Tasks -->
+  <div class="tasks-section">
+    <div class="section-header">
+      <span class="section-title">Task Queue</span>
+    </div>
+    <div id="tasks-container">
+      <div class="empty-state">No tasks in queue</div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="log-section">
+    <div class="section-header">
+      <span class="section-title">Activity Log</span>
+      <button id="clear-log-btn" class="btn-secondary" style="width: auto; padding: 4px 8px; font-size: 10px;">Clear</button>
+    </div>
+    <div id="log-container">
+      <div class="log-entry">No activity yet</div>
+    </div>
+  </div>
+
+  <!-- Help -->
+  <div class="help-section">
+    <div class="help-title">How to Use</div>
+    <div class="help-text">
+      <ol>
+        <li>Open <strong>chat.qwen.ai</strong> in a tab</li>
+        <li>Select generation type (Image/Video)</li>
+        <li>Enter your prompt</li>
+        <li>Choose aspect ratio</li>
+        <li>Click <strong>Generate</strong></li>
+      </ol>
+      <p style="margin-top: 8px; font-size: 10px;">
+        Works on existing chat sessions - no refresh needed!
+      </p>
+    </div>
+  </div>
+
+  <script src="bridge.js"></script>
+</body>
+</html>

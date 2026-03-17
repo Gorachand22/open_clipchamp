@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "clipchamp": {
+      "command": "node",
+      "args": ["/home/babul/open_clipchamp/mcp-server/dist/index.js"],
+      "env": {
+        "CLIPCHAMP_URL": "http://localhost:3000"
+      }
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "clipchamp:.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"[$(date '+%Y-%m-%d %H:%M:%S')] PRE  $TOOL_NAME - Args: $(echo \"$TOOL_INPUT\" | head -c 200)\" >> /tmp/clipchamp-hooks.log"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "clipchamp:.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"[$(date '+%Y-%m-%d %H:%M:%S')] POST $TOOL_NAME - Exit: $TOOL_EXIT_CODE\" >> /tmp/clipchamp-hooks.log"
+          }
+        ]
+      }
+    ]
+  }
+}
